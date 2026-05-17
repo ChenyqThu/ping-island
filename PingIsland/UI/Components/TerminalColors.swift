@@ -21,6 +21,7 @@ struct TerminalColors {
     static let codebuddy = Color(red: 0.68, green: 0.45, blue: 0.98)
     static let qoder = Color(red: 0.12, green: 0.88, blue: 0.56)
     static let kimi = Color(red: 0.96, green: 0.30, blue: 0.42)
+    static let mail = Color(red: 0.95, green: 0.50, blue: 0.40)
     static let dim = Color.white.opacity(0.4)
     static let dimmer = Color.white.opacity(0.2)
     static let prompt = Color(red: 0.85, green: 0.47, blue: 0.34)  // #d97857
@@ -41,6 +42,8 @@ extension SessionProvider {
             return TerminalColors.kimi
         case .gemini:
             return TerminalColors.blue // Using blue as placeholder
+        case .mail:
+            return TerminalColors.mail
         }
     }
 }
@@ -70,6 +73,8 @@ extension SessionClientBrand {
             return TerminalColors.green
         case .kimi:
             return TerminalColors.kimi
+        case .mail:
+            return TerminalColors.mail
         }
     }
 }

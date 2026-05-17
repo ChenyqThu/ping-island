@@ -399,6 +399,8 @@ struct SessionListView: View {
             return Color(red: 0.96, green: 0.30, blue: 0.42)
         case .gemini:
             return Color(red: 0.10, green: 0.45, blue: 0.90) // Placeholder blue, adjust if needed
+        case .mail:
+            return Color(red: 0.95, green: 0.50, blue: 0.40)
         }
     }
 }

@@ -32,6 +32,7 @@ enum SessionClientBrand: String, Codable, Equatable, Sendable {
     case copilot
     case neutral
     case kimi
+    case mail
 }
 
 enum SessionAssistantLabelMode: String, Sendable {
@@ -990,6 +991,39 @@ enum ClientProfileRegistry {
                 HookInstallEventDescriptor(name: "SessionEnd", templates: [.plain]),
             ]
         ),
+        ManagedHookClientProfile(
+            id: "mailagent",
+            title: "MailAgent",
+            subtitle: "邮件 / Mail —— 通过 ~/.mailagent/plugins/ping_island 接入 Island",
+            installationKind: .pluginDirectory,
+            alwaysVisibleInSettings: true,
+            logoAssetName: "MailLogo",
+            prefersBundledLogoOverAppIcon: true,
+            localAppBundleIdentifiers: ["com.apple.mail"],
+            iconSymbolName: "envelope.fill",
+            configurationRelativePath: ".mailagent/plugins/ping_island/manifest.json",
+            bridgeSource: "mail",
+            bridgeExtraArguments: [
+                "--client-kind", "mailagent",
+                "--client-name", "MailAgent",
+                "--client-origin", "plugin",
+                "--client-originator", "MailAgent",
+                "--thread-source", "mailagent-hooks"
+            ],
+            defaultEnabled: false,
+            brand: .mail,
+            events: [
+                HookInstallEventDescriptor(name: "MailReceived",       templates: [.plain]),
+                HookInstallEventDescriptor(name: "MailReceivedUrgent", templates: [.plain]),
+                HookInstallEventDescriptor(name: "LLMReviewed",        templates: [.plain]),
+                HookInstallEventDescriptor(name: "AIDraftStart",       templates: [.plain]),
+                HookInstallEventDescriptor(name: "AIDraftStream",      templates: [.plain]),
+                HookInstallEventDescriptor(name: "AIDraftReady",       templates: [.plain]),
+                HookInstallEventDescriptor(name: "MailCompleted",      templates: [.plain]),
+                HookInstallEventDescriptor(name: "SyncFailed",         templates: [.plain]),
+                HookInstallEventDescriptor(name: "DeadLetterAccum",    templates: [.plain]),
+            ]
+        ),
     ]
 
     nonisolated static let runtimeProfiles: [SessionClientProfile] = [
@@ -1474,6 +1508,8 @@ enum ClientProfileRegistry {
             return runtimeProfile(id: "kimi")
         case .gemini:
             return runtimeProfile(id: "gemini")
+        case .mail:
+            return runtimeProfile(id: "mailagent")
         }
     }
 

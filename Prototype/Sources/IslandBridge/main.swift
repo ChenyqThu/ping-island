@@ -1219,6 +1219,8 @@ private enum RemoteBridgeMessageBuilder {
             return "kimi"
         case .gemini:
             return "gemini"
+        case .mail:
+            return "custom"
         }
     }
 

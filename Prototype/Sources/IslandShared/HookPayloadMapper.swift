@@ -243,6 +243,11 @@ public enum HookPayloadMapper {
                 }
                 return String(data: data, encoding: .utf8) ?? #"{"permissionDecision":"allow"}"#
             }
+        case .mail:
+            // MailAgent intervention answers are consumed directly by the Python plugin
+            // via BridgeResponse over socket; ping-island does not need to encode a
+            // hook-stdout payload for the .mail provider.
+            return "{}"
         }
     }
 
@@ -1836,6 +1841,8 @@ private extension AgentProvider {
             return "Kimi"
         case .gemini:
             return "Gemini"
+        case .mail:
+            return "MailAgent"
         }
     }
 }

@@ -6,6 +6,7 @@ enum SessionProvider: String, Codable, Equatable, Sendable {
     case copilot
     case kimi
     case gemini
+    case mail
 
     nonisolated var displayName: String {
         switch self {
@@ -19,6 +20,8 @@ enum SessionProvider: String, Codable, Equatable, Sendable {
             return "Kimi"
         case .gemini:
             return "Gemini"
+        case .mail:
+            return "MailAgent"
         }
     }
 }
@@ -122,6 +125,8 @@ struct SessionClientInfo: Codable, Equatable, Sendable {
             return SessionClientInfo(kind: .custom, profileID: "kimi", name: "Kimi CLI", origin: "cli")
         case .gemini:
             return SessionClientInfo(kind: .custom, profileID: "gemini", name: "Gemini CLI", origin: "cli")
+        case .mail:
+            return SessionClientInfo(kind: .custom, profileID: "mailagent", name: "MailAgent", origin: "plugin")
         }
     }
 

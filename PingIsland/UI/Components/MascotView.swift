@@ -149,6 +149,10 @@ enum MascotClient: String, CaseIterable, Identifiable, Sendable {
             self = .kimi
         case .gemini:
             self = .gemini
+        case .mail:
+            // Sprint 1 fallback: Hermes (messenger) mascot for MailAgent brand.
+            // Sprint 5 polish: add MascotClient.mail + MascotKind.mail + designed assets.
+            self = .hermes
         }
     }
 
@@ -198,6 +202,9 @@ enum MascotClient: String, CaseIterable, Identifiable, Sendable {
             self = .hermes
         case .qwen:
             self = .qwen
+        case .mail:
+            // Sprint 1 fallback: Hermes (messenger) mascot for MailAgent brand.
+            self = .hermes
         case .neutral:
             if clientInfo.resolvedProfile(for: provider)?.id == "openclaw" {
                 self = .openclaw
@@ -222,6 +229,8 @@ enum MascotClient: String, CaseIterable, Identifiable, Sendable {
                 self = .kimi
             case .gemini:
                 self = .gemini
+            case .mail:
+                self = .hermes  // Sprint 1 fallback for MailAgent brand
             }
         case .opencode:
             self = .opencode
@@ -243,6 +252,8 @@ enum MascotClient: String, CaseIterable, Identifiable, Sendable {
                 self = .kimi
             case .gemini:
                 self = .gemini
+            case .mail:
+                self = .hermes  // Sprint 1 fallback for MailAgent brand
             }
         }
     }

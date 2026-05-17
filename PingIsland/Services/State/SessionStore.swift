@@ -258,6 +258,10 @@ actor SessionStore {
             )
         case .copilot:
             runtimeClientInfo = SessionClientInfo.default(for: .copilot)
+        case .mail:
+            // MailAgent envelope never reaches native-runtime path (plugin/socket bridge only).
+            // Fall back to default mail client info for defensive completeness.
+            runtimeClientInfo = SessionClientInfo.default(for: .mail)
         }
 
         let resolvedClientInfo = normalizedClientInfo(
@@ -4076,6 +4080,8 @@ actor SessionStore {
         case .kimi:
             return clientInfo
         case .gemini:
+            return clientInfo
+        case .mail:
             return clientInfo
         }
     }
