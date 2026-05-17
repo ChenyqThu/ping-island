@@ -46,4 +46,9 @@ releases/notes/*
 # Xcode backup
 *.xcodeproj.backup/
 CLAUDE.md
+# Allow MailAgent fork-internal docs/mailagent/CLAUDE.md (project-internal CLAUDE
+# guidance lives under docs/mailagent/, not at fork root).
+!docs/mailagent/CLAUDE.md
 .omx/
+# OMC (oh-my-claudecode) tooling state — never commit; lives in user's home or repo.
+.omc/
