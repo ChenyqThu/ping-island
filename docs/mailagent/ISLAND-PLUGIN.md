@@ -265,6 +265,20 @@ Sprint 1 出 PNG 占位即可（复制现有 mascot / 用 sips 生纯色 PNG / �
 
 以上 Sprint 1 不解，Sprint 4 联调时根据真实跑通的行为再决定。
 
+#### 2.5.4 Sprint 1 smoke test 验证边界（2026-05-17 实测记录）
+
+Sprint 1 完工 smoke test 用 `nc -U /tmp/island.sock` 手发 `MailReceived` envelope（带 `expectsResponse: false, status.kind: "notification"`），观察到：
+
+- ✅ **wire 层**：envelope decode 成功（`BridgeProvider.mail` 加齐后无 `Failed to parse bridge envelope` warning）
+- ✅ **`HookPayloadMapper.shouldDeliverEnvelope`**：对 mail envelope 返回 true（只过滤 Qoder-IDE-hosted），envelope 被投递到 session 层
+- ❓ **envelope → SessionState dispatch**：Sprint 1 范围内未验证。`MailReceived` 是 MailAgent 自家事件名，**不在** ping-island 现有的 hook event dispatch 表里（那里只识别 `UserPromptSubmit` / `PreToolUse` / `Notification` / `Stop` / `SessionStart` 等 Claude/Codex 的事件名）。Sprint 4 联调时需要决定：
+  1. 让 Python plugin emit envelope 时把 `eventType` 映射到 ping-island 认识的事件名（如 `Notification`），靠 `metadata.mailagent.*` 字段区分 → 改动小，但语义糊（mail event 看起来像 generic notification）
+  2. 在 Swift 侧 HookSocketServer / SessionStore 加 mail 事件名识别 → 改动大，但语义清晰；rebase-friendliness 风险增大
+  3. 暂时复用 `Notification` 事件名 + 走 generic HoverSessionCard，Sprint 5 polish 再决定是否做专属事件分支
+- ❌ **Dynamic Island 展开**：Sprint 1 smoke test envelope 是 `MailReceived` 普通通知（无 intervention，非 `waitingForApproval`），按 ping-island Phase 模型本来就**不主动展开刘海** —— 只会 Phase 2 留 dock icon。要测试展开，envelope 要带 intervention（5 选 1 options）或 `status.kind = "waitingForInput"`，那是 Urgent / LLMReviewedUrgent 的语义，属于 Sprint 2/3 Python plugin 真实 emit 时才有
+
+**结论**：Sprint 1 收尾标准是"wire 层 + profile 注册 + skeleton view 文件存在 + Settings UI 显示 MailAgent"。视觉上"灵动岛因 mail envelope 展开"**不在 Sprint 1 范围**，等 Sprint 4 联调 + 解决 §2.5.4 决议题后才能跑通。
+
 ### 2.8 SessionLauncher.swift 是否需要改 — 不需要
 
 ping-island 的 `SessionLauncher.swift` 负责"在外部 app 中启动 Claude/Codex session"（如打开终端 + 执行 `claude` 命令）。邮件流不是"启动 session" 语义，而是"通知 + 跳转到现有 Mail.app/MailAgent.app"，应通过 `BridgeResponse.decision` 走 §3.4 dispatch，**不 hijack** SessionLauncher。
