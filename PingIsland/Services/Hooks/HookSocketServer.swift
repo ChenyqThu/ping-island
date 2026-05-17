@@ -282,6 +282,7 @@ private enum BridgeProvider: String, Codable, Sendable {
     case copilot
     case kimi
     case gemini
+    case mail
 }
 
 private enum BridgeStatusKind: String, Codable, Sendable {
@@ -815,6 +816,12 @@ private extension BridgeEnvelope {
             } else {
                 kind = .custom
             }
+        case .mail:
+            if let matchedProfile {
+                kind = matchedProfile.kind
+            } else {
+                kind = .custom
+            }
         }
 
         let resolvedProfile: SessionClientProfile?
@@ -1049,6 +1056,8 @@ private extension BridgeProvider {
             return .kimi
         case .gemini:
             return .gemini
+        case .mail:
+            return .mail
         }
     }
 }

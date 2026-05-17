@@ -60,6 +60,7 @@
 | 错位 | 原 spec | 实测 | 修正位置 |
 |---|---|---|---|
 | **provider 枚举漏列**（H-A）| §2.1 只列 `AgentProvider` | 仓内还有独立的 `SessionProvider`（`PingIsland/Models/SessionProvider.swift:3`），是 `SessionState.provider` 真正的类型；envelope 经 HookPayloadMapper 解码后落到 `SessionProvider`。只加 `AgentProvider.mail` 不够 | §2.1b 新增 |
+| **wire 解码 enum 漏列**（H-E，smoke test 后发现）| §2 没提 | `HookSocketServer.swift:279` 内部还有 `private enum BridgeProvider`（5 cases），是 **socket 上 JSON envelope 解码的真正入口**。`AgentProvider`（Models.swift `BridgeEnvelope.provider`）是 HookPayloadMapper 出 envelope 时用的类型；socket 进 envelope 时 HookSocketServer 用自己的私有 mirror struct + `BridgeProvider` 解 JSON，**再** 经 `BridgeProvider.sessionProvider` extension 映射到 `SessionProvider`。`AgentProvider.mail` 三 enum case 都齐了但 `BridgeProvider.mail` 缺 → `nc -U /tmp/island.sock` 发 `"provider":"mail"` 字符串 silent reject（`Failed to parse bridge envelope` log）。Sprint 1 验证时跑 smoke test 才暴露 | §2.1c 新增 |
 | **registry 位置错**（H-B）| §2.3 说"`HookInstaller.swift` 或同级"| 实际 registry 在 `PingIsland/Models/ClientProfile.swift:547 enum ClientProfileRegistry { static let managedHookProfiles: [ManagedHookClientProfile] = [...] }` 数组里（16 个 profile 已注册），HookInstaller.swift 不直接构造 profile | §2.3 改 |
 | **Mascot 命名错**（H-C）| §2.4 让建 `mascot-mail-*.imageset/` | 仓内 18 个 imageset 全部 PascalCase `*Logo.imageset`（ClaudeLogo / KimiLogo / OpenClawLogo 等），`logoAssetName` 字段实际填 `"ClaudeLogo"` 这种字面值；且 `ManagedHookClientProfile.logoAssetName` 只接受**单个** asset，不能挂 work/personal/dev 三个 | §2.4 改 |
 | **路由方案错**（H-D + §5 深挖）| §2.5 让在 `IslandOpenedContentView.swift` 加 `switch session.provider { case .mail: MailAgentSessionView }` | `IslandOpenedContentView` 实际是 `switch route` 五分支（sessionList / hoverDashboard / attentionNotification / completionNotification / chat），不是 provider 扁平 switch。`IslandExpandedRouteResolver` 是 **provider-agnostic** 的（只看 surface/trigger/contentType/sessions）。Mail event 真正落点是 `.attentionNotification` / `.hoverDashboard` / `.sessionList` 三条 — 全部由 generic `HoverSessionCard`（在 `PingIsland/UI/Views/SessionHoverPreviewView.swift`）渲染，已能通过 `session.title / session.preview / session.intervention.options` 消费 mail 字段；用户主动点 session 进 detail view 才走 `.chat` 分支，邮件不是持久 chat session，不该走那 | §2.5 改 |
@@ -115,6 +116,31 @@
 ```
 
 编译时若仓内其他文件出现 missing-case，按"返回 mail brand 主题色 / 兜底字符串"补齐（详 Sprint 1 D 阶段）。
+
+### 2.1c `PingIsland/Services/Hooks/HookSocketServer.swift` — `BridgeProvider`（2026-05-17 smoke test 后补漏）
+
+> wire 解码层 enum，**private 到 HookSocketServer.swift**，是 socket 上 JSON envelope 进入时的真正解码入口（line 279）。
+> 跟 §2.1 的 `AgentProvider` **不是同一个** enum —— HookSocketServer 内部用一套私有 mirror struct（`BridgeEnvelope` / `BridgeProvider` / `BridgeStatus` / `BridgeTerminalContext` ...）反序列化 JSON，**再**通过 `BridgeProvider.sessionProvider` extension（line 1040+）把 wire-enum 映射到 §2.1b 的 `SessionProvider`。
+> `AgentProvider`（在 `Prototype/Sources/IslandShared/Models.swift` 的 public `BridgeEnvelope`）是 ping-island 出 envelope 时用的类型（HookPayloadMapper outbound），socket 入站 envelope 走的是 `BridgeProvider` 这条路径。
+> **后果**：三 enum case（AgentProvider/SessionProvider/SessionClientBrand）都加 `.mail` 后，build 还是绿，但 runtime 发 `"provider":"mail"` 字符串时 `BridgeProvider` Codable 不认 → silent reject + `Failed to parse bridge envelope` warning log → 灵动岛根本不展开。Sprint 1 完工 smoke test（`nc -U /tmp/island.sock` 手发 envelope）才暴露。
+
+```diff
+ private enum BridgeProvider: String, Codable, Sendable {
+     case claude
+     case codex
+     case copilot
+     case kimi
+     case gemini
++    case mail
+ }
+```
+
+还有 2 处依赖 switch 需要扩 `.mail` case：
+
+- `HookSocketServer.swift:780` 内 `let kind: SessionClientKind = ...` switch（决定 SessionClientKind）—— mail 走 plugin-style，fall back 到 matchedProfile?.kind ?? .custom，跟 .copilot/.kimi/.gemini 同模式
+- `HookSocketServer.swift:1042` `BridgeProvider.sessionProvider` extension —— `case .mail: return .mail` 把 wire 层映射到 session 层
+
+**Sprint 1 文件数从 7 → 8**（spec 原 6 + SessionProvider + HookSocketServer）。HANDOFF.md 同步修正。
 
 ### 2.2 `PingIsland/Models/ClientProfile.swift` — `SessionClientBrand`
 

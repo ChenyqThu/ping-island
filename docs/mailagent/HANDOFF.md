@@ -4,7 +4,7 @@
 > **预计工作量**：**1.5-2 天 Swift**（2026-05-17 fork-session 实测后再调，比 REVIEW-LOG H-10 估的 2-3 天再省 —— 不改 IslandOpenedContentView，详 ISLAND-PLUGIN.md §2.0 / §2.5）
 > **依赖**：无。与 MailAgent frontend Sprint 0 完全并行，Day 1 可起。
 > **本文档**：手把手把 Sprint 1 跑完的 checklist + 验证标准。
-> **关键修正**：实际改动是 **7 个文件**（不是 6 个，多了 `SessionProvider.swift`），且 **§2.5 spec 路由 diff 错位 → Sprint 1 不动 `IslandOpenedContentView.swift`**。详 [`ISLAND-PLUGIN.md`](./ISLAND-PLUGIN.md) §2.0 实测修正记录。
+> **关键修正**：实际改动是 **8 个文件**（不是 6 个；多了 `SessionProvider.swift` + `HookSocketServer.swift` 的私有 `BridgeProvider` enum），且 **§2.5 spec 路由 diff 错位 → Sprint 1 不动 `IslandOpenedContentView.swift`**。详 [`ISLAND-PLUGIN.md`](./ISLAND-PLUGIN.md) §2.0 实测修正记录（含 H-A/B/C/D/E 5 条 spec 错位）。
 
 ---
 
@@ -54,10 +54,11 @@ ls PingIsland/Assets.xcassets/                                  # mascot 资源�
 
 ### 1.2 Swift 改动（authoritative diff 在 [`ISLAND-PLUGIN.md`](./ISLAND-PLUGIN.md) §2，2026-05-17 实测修正后）
 
-**7 个文件 ~150-300 行 diff**（spec 原 6 个，加 SessionProvider；IslandOpenedContentView 退出 Sprint 1）：
+**8 个文件 ~150-300 行 diff**（spec 原 6 个；加 SessionProvider + HookSocketServer 内 private BridgeProvider；IslandOpenedContentView 退出 Sprint 1）：
 
 - [ ] **`Prototype/Sources/IslandShared/Models.swift`** — `AgentProvider` enum 加 `case mail`（[`ISLAND-PLUGIN.md`](./ISLAND-PLUGIN.md) §2.1）
 - [ ] **`PingIsland/Models/SessionProvider.swift`** — `SessionProvider` enum 加 `case mail` + `displayName` switch 补 `.mail → "MailAgent"`（§2.1b，**spec 原漏，实测必加**）
+- [ ] **`PingIsland/Services/Hooks/HookSocketServer.swift`** — 内部 `private enum BridgeProvider` 加 `case mail`（§2.1c，**wire 解码真入口；spec 原漏，smoke test 后才暴露**）+ 同文件 2 处依赖 switch（line 780 SessionClientKind / line 1042 sessionProvider extension）
 - [ ] **`PingIsland/Models/ClientProfile.swift`** §1 — `SessionClientBrand` 加 `case mail`（§2.2）
 - [ ] **`PingIsland/Models/ClientProfile.swift`** §2 — `ClientProfileRegistry.managedHookProfiles` 数组末尾（line ~547+）append `ManagedHookClientProfile(id: "mailagent", brand: .mail, …)`（§2.3，**位置实测在 ClientProfile.swift 不在 HookInstaller.swift**）
 - [ ] **Mascot 资源** — `PingIsland/Assets.xcassets/` 加 4 个 `.imageset/`：`MailLogo` + `MailMascotWork` + `MailMascotPersonal` + `MailMascotDev`（§2.4，**PascalCase 跟仓内惯例 *Logo 一致**）
@@ -119,7 +120,7 @@ Sprint 1 完工后：
 | 月度 rebase upstream 冲突大 | ISLAND-PLUGIN §0 | 改动只能在 enum/资源/profile 文件，**业务逻辑零修改** |
 | Mascot 资源命名不一致 → fork 内多 brand 混乱 | ISLAND-PLUGIN §2.4 (2026-05-17 实测修正) | 跟仓内 18 个 `*Logo.imageset` 惯例对齐：`MailLogo` (profile) + `MailMascot{Work,Personal,Dev}` (view)。**不**用 `mascot-mail-*` |
 | **照搬 §2.5 spec diff 改 IslandOpenedContentView** | ISLAND-PLUGIN §2.5 (2026-05-17 review) | spec 写的 `switch session.provider` diff 在实际文件里没对应代码 (实际是 `switch route` 五分支)。Sprint 1 **完全不动 IslandOpenedContentView**；mail event 走 generic `HoverSessionCard` 渲染，Sprint 4 联调再决定 MailAgentSessionView 接入点 |
-| **只加 AgentProvider.mail 漏 SessionProvider.mail** | ISLAND-PLUGIN §2.1b (2026-05-17 review) | 仓内有 3 个 provider/brand enum：`AgentProvider`(wire) / `SessionProvider`(session/UI) / `SessionClientBrand`(profile)，都要加。SessionProvider spec 原漏，最容易忘 |
+| **只加 AgentProvider.mail 漏 SessionProvider.mail / BridgeProvider.mail** | ISLAND-PLUGIN §2.1b / §2.1c (2026-05-17 review) | 仓内有 **4 个** provider/brand enum：`AgentProvider`(outbound wire, BridgeEnvelope 出) / `SessionProvider`(session/UI) / `SessionClientBrand`(profile) / `BridgeProvider`(**inbound wire 解码**, HookSocketServer 内 private)，**全部** 都要加。前 3 个 spec 原漏 1 个（SessionProvider），第 4 个 spec 完全没提，build 不报错但 smoke test 时 socket 收到 `"provider":"mail"` 会 silent reject |
 | **ClientProfile registry 找错文件** | ISLAND-PLUGIN §2.3 (2026-05-17 review) | spec 原说 "HookInstaller.swift 或同级"，**错**。实际在 `PingIsland/Models/ClientProfile.swift:547 ClientProfileRegistry.managedHookProfiles` 数组 |
 
 ---

@@ -15,6 +15,7 @@
 
 - `Prototype/Sources/IslandShared/Models.swift` — `AgentProvider` enum 加 `case mail`（§2.1）
 - `PingIsland/Models/SessionProvider.swift` — `SessionProvider` enum 加 `case mail` + `displayName` 补 `.mail → "MailAgent"`（§2.1b，**spec 原漏**）
+- `PingIsland/Services/Hooks/HookSocketServer.swift` — 内部 `private enum BridgeProvider` 加 `case mail`（§2.1c，**wire 解码真入口；smoke test 才暴露**）+ 2 处依赖 switch（line 780 / 1042）
 - `PingIsland/Models/ClientProfile.swift` §1 — `SessionClientBrand` 加 `case mail`（§2.2）
 - `PingIsland/Models/ClientProfile.swift` §2 — `ClientProfileRegistry.managedHookProfiles`（line ~547+）数组末尾 append MailAgent profile entry（§2.3，**registry 在这里，不在 HookInstaller.swift**）
 - `PingIsland/Assets.xcassets/` — 加 `MailLogo` + `MailMascot{Work,Personal,Dev}` 4 个 `.imageset`（§2.4，**PascalCase 跟 18 个 `*Logo` 惯例对齐，不用 `mascot-mail-*`**）
