@@ -266,41 +266,39 @@ struct MailAgentSessionView: View {
         return "from: \(name.isEmpty ? addr : name)"
     }
 
-    // MARK: - Mascot (T6 SwiftUI native fallback, 真 PNG/GIF 资源 imageset 待出图)
+    // MARK: - Mascot (T6: 真 pixel-art PNG imageset, NEAREST interpolation 保锐利)
 
     @ViewBuilder
     private var mascotView: some View {
-        let (symbol, tint, bg) = mascotStyle
-        Image(systemName: symbol)
-            .font(.system(size: 16, weight: .semibold))
-            .foregroundColor(tint)
-            .frame(width: 32, height: 32)
+        Image(mascotAssetName)
+            .resizable()
+            .interpolation(.none)  // 保留 pixel-art 锐利, 禁止 SwiftUI 默认抗锯齿
+            .scaledToFit()
+            .frame(width: 40, height: 40)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(bg)
+                    .fill(mascotBackgroundTint)
             )
     }
 
-    /// Mascot 视觉映射 — T6 出真 PNG/GIF imageset 时切走 `Image("MailMascot{Work,Personal,Dev}")`。
-    /// 暂用 SF Symbol + 染色块作 fallback，保证视觉差异已可见。
-    private var mascotStyle: (String, Color, Color) {
+    /// MailAgent mascot asset name → Asset Catalog imageset 目录名 (Sprint 1 fork 67c8fd9 ship,
+    /// T6 (commit pending) 内置真 pixel-art PNG @1x/@2x/@3x 替换 CSS 占位).
+    private var mascotAssetName: String {
         switch mascotId {
-        case "work":
-            return ("briefcase.fill",
-                    Color(red: 0.946, green: 0.522, blue: 0.279),
-                    Color(red: 0.165, green: 0.122, blue: 0.078))
-        case "personal":
-            return ("person.crop.circle.fill",
-                    Color(red: 0.420, green: 0.439, blue: 0.480),
-                    Color(red: 0.122, green: 0.125, blue: 0.141))
-        case "dev":
-            return ("ant.fill",
-                    Color(red: 0.365, green: 0.729, blue: 0.549),
-                    Color(red: 0.071, green: 0.125, blue: 0.090))
-        default:
-            return ("envelope.fill",
-                    accentColor.opacity(0.85),
-                    accentColor.opacity(0.14))
+        case "work":     return "MailMascotWork"
+        case "personal": return "MailMascotPersonal"
+        case "dev":      return "MailMascotDev"
+        default:         return "MailLogo"
+        }
+    }
+
+    /// Mascot 背景染色块 (mockup §3 pi-avatar-* tint, 让 mascot 在灵动岛黑底上跳出来).
+    private var mascotBackgroundTint: Color {
+        switch mascotId {
+        case "work":     return Color(red: 0.165, green: 0.122, blue: 0.078)
+        case "personal": return Color(red: 0.122, green: 0.125, blue: 0.141)
+        case "dev":      return Color(red: 0.071, green: 0.125, blue: 0.090)
+        default:         return accentColor.opacity(0.14)
         }
     }
 
