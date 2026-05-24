@@ -1252,6 +1252,27 @@ enum ClientProfileRegistry {
             keywordAliases: ["gemini", "gemini cli"],
             bundleIdentifiers: []
         ),
+        // MailAgent runtime profile (Phase 1·T4 follow-up bug fix 2026-05-23):
+        // Sprint 1 ship 把 MailAgent 注册到 managedHookProfiles, 但 SessionClientInfo.brand
+        // computed property 查 runtimeProfiles. 缺这个 entry 导致 mail brand → .neutral fallback,
+        // 我们 SessionAttentionNotificationView / SessionHoverDashboardView 内
+        // `if session.clientInfo.brand == .mail` 分支永不触发,
+        // mail event 仍走 generic HoverSessionCard / SessionHoverCompactRow 渲染 (zZz mascot + /·/ 乱码).
+        SessionClientProfile(
+            id: "mailagent",
+            provider: .mail,
+            family: .claudeHooks,
+            kind: .custom,
+            displayName: "MailAgent",
+            assistantLabelMode: .badgeLabel,
+            brand: .mail,
+            defaultBundleIdentifier: nil,
+            defaultOrigin: "plugin",
+            recognizedKinds: ["mailagent", "mail-agent", "mail_agent", "mail agent"],
+            exactAliases: ["mailagent", "mail-agent", "mail agent"],
+            keywordAliases: ["mailagent", "mail agent"],
+            bundleIdentifiers: []
+        ),
         SessionClientProfile(
             id: "kimi",
             provider: .kimi,
