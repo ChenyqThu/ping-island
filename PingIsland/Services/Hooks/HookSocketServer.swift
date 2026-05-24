@@ -83,6 +83,10 @@ struct HookEvent: Sendable {
     let ingress: SessionIngress
     let bridgeIntervention: SessionIntervention?
     let suppressInAppPrompt: Bool
+    /// Raw envelope.metadata pass-through. MailAgent Phase 1 (PRD §5.1 / T3 routing decision)
+    /// uses `mailagent.*` keys (scenario / mascot / aiSummary / senderName / accent / ...).
+    /// Default empty for non-bridge constructors (demo runner / remote).
+    let metadata: [String: String]
 
     init(
         sessionId: String,
@@ -100,7 +104,8 @@ struct HookEvent: Sendable {
         message: String?,
         ingress: SessionIngress = .hookBridge,
         bridgeIntervention: SessionIntervention? = nil,
-        suppressInAppPrompt: Bool = false
+        suppressInAppPrompt: Bool = false,
+        metadata: [String: String] = [:]
     ) {
         self.sessionId = sessionId
         self.cwd = cwd
@@ -118,6 +123,7 @@ struct HookEvent: Sendable {
         self.ingress = ingress
         self.bridgeIntervention = bridgeIntervention
         self.suppressInAppPrompt = suppressInAppPrompt
+        self.metadata = metadata
     }
 
     nonisolated var sessionPhase: SessionPhase {
@@ -228,7 +234,8 @@ extension HookEvent {
             message: message,
             ingress: ingress,
             bridgeIntervention: bridgeIntervention?.withResolvedToolUseId(toolUseId),
-            suppressInAppPrompt: suppressInAppPrompt
+            suppressInAppPrompt: suppressInAppPrompt,
+            metadata: metadata
         )
     }
 
@@ -249,7 +256,8 @@ extension HookEvent {
             message: message,
             ingress: ingress,
             bridgeIntervention: bridgeIntervention,
-            suppressInAppPrompt: suppressInAppPrompt
+            suppressInAppPrompt: suppressInAppPrompt,
+            metadata: metadata
         )
     }
 }
@@ -608,7 +616,8 @@ private extension BridgeEnvelope {
                 fallbackID: metadata["tool_use_id"],
                 metadata: metadata
             ),
-            suppressInAppPrompt: (metadata["suppress_in_app_prompt"] == "true")
+            suppressInAppPrompt: (metadata["suppress_in_app_prompt"] == "true"),
+            metadata: metadata
         )
     }
 

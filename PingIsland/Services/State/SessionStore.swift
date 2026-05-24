@@ -448,6 +448,13 @@ actor SessionStore {
             }
         }
 
+        // MailAgent Phase 1 (PRD §5.1 / T3 routing decision): preserve raw envelope.metadata
+        // so MailAgentSessionView can read `mailagent.*` keys (scenario / mascot / aiSummary / ...).
+        // Other brands ignore this field; for mail-brand events it carries the full payload.
+        if !event.metadata.isEmpty {
+            session.hookMetadata = event.metadata
+        }
+
         // For hook-only clients without JSONL (e.g. Hermes), build chat history
         // directly from hook events so users can see conversation content.
         if session.clientInfo.isHermesClient {

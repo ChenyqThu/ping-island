@@ -106,6 +106,14 @@ struct SessionState: Equatable, Identifiable, Sendable {
     var lastActivity: Date
     var createdAt: Date
 
+    // MARK: - Hook Metadata (MailAgent Phase 1, T3 routing decision)
+
+    /// Raw envelope.metadata pass-through from HookSocketServer.
+    /// MailAgent reads `mailagent.*` keys (scenario / mascot / aiSummary / senderName /
+    /// accent / aiAction / aiPriority / ...). Empty dict for non-hook sessions
+    /// (native runtime / file watcher).
+    var hookMetadata: [String: String]
+
     // MARK: - Identifiable
 
     var id: String { sessionId }
@@ -145,7 +153,8 @@ struct SessionState: Equatable, Identifiable, Sendable {
         ),
         needsClearReconciliation: Bool = false,
         lastActivity: Date = Date(),
-        createdAt: Date = Date()
+        createdAt: Date = Date(),
+        hookMetadata: [String: String] = [:]
     ) {
         self.sessionId = sessionId
         self.cwd = cwd
@@ -177,6 +186,7 @@ struct SessionState: Equatable, Identifiable, Sendable {
         self.needsClearReconciliation = needsClearReconciliation
         self.lastActivity = lastActivity
         self.createdAt = createdAt
+        self.hookMetadata = hookMetadata
     }
 
     // MARK: - Derived Properties
