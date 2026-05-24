@@ -368,9 +368,26 @@ struct MailAgentSessionView: View {
 
     private func interventionButton(_ opt: SessionInterventionOption, isPrimary: Bool) -> some View {
         Button {
-            // TODO Phase 1·T4 next iteration: wire to HookSocketServer.shared.respondToIntervention
-            // 参考 SessionMonitor.swift:183-195
-            onActionCompleted()
+            // Phase 1·T4 minimal wire — let view dismiss via SessionStore intervention resolution.
+            // submittedAnswers 字典只载用户选的 option id (单选, mockup §2 Scene 3 button row 语义)。
+            // TODO next iteration: 也通过 HookSocketServer 发 response 回 plugin socket, 让 plugin 端
+            //   island_response.handle_response 真触发 action handler (osascript 打开 Mail.app /
+            //   mailagent CLI 创建草稿 / 调 notion update-flag / etc). 参考 SessionMonitor.swift:183-195
+            //   现 plugin 端 ping_island.send_async 3s timeout 后 fail-open, click 不会真生效.
+            let sessionId = session.sessionId
+            let optionId = opt.id
+            Task {
+                await SessionStore.shared.process(
+                    .interventionResolved(
+                        sessionId: sessionId,
+                        nextPhase: .ended,
+                        submittedAnswers: [optionId: ["1"]]
+                    )
+                )
+                await MainActor.run {
+                    onActionCompleted()
+                }
+            }
         } label: {
             HStack(spacing: 6) {
                 Text(opt.title)
