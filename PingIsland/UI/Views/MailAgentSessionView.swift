@@ -366,14 +366,23 @@ struct MailAgentSessionView: View {
 
     private func interventionButton(_ opt: SessionInterventionOption, isPrimary: Bool) -> some View {
         Button {
-            // Phase 1·T4 minimal wire — let view dismiss via SessionStore intervention resolution.
-            // submittedAnswers 字典只载用户选的 option id (单选, mockup §2 Scene 3 button row 语义)。
-            // TODO next iteration: 也通过 HookSocketServer 发 response 回 plugin socket, 让 plugin 端
-            //   island_response.handle_response 真触发 action handler (osascript 打开 Mail.app /
-            //   mailagent CLI 创建草稿 / 调 notion update-flag / etc). 参考 SessionMonitor.swift:183-195
-            //   现 plugin 端 ping_island.send_async 3s timeout 后 fail-open, click 不会真生效.
+            // Phase 1·T7 follow-up (button real action wire, 2026-05-25):
+            // 1. HookSocketServer.respondToIntervention 反向 socket response 回 plugin
+            //    → plugin `_extract_choice({"decision":{"answer":{"choice": opt.id}}})` 拿 option id
+            //    → `island_response.handle_response` 触发对应业务 handler
+            //      (open_mail / open_notion / create_draft / mark_done / snooze_1h)
+            // 2. 本地 SessionStore.interventionResolved 让 view dismiss
+            // toolUseId 来源: plugin envelope.py `to_wire_dict` 在 metadata 写 `tool_use_id =
+            // "bridge-<envelope_id>"`, 跟 fork HookSocketServer line 1791 fallback 一致.
+            // fallback 用 sessionId (旧 envelope 没含 tool_use_id 兜底, 至少不 crash).
             let sessionId = session.sessionId
             let optionId = opt.id
+            let toolUseId = session.hookMetadata["tool_use_id"] ?? sessionId
+            HookSocketServer.shared.respondToIntervention(
+                toolUseId: toolUseId,
+                decision: "answer",
+                updatedInput: ["choice": optionId]
+            )
             Task {
                 await SessionStore.shared.process(
                     .interventionResolved(
