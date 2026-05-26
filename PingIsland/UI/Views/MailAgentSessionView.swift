@@ -16,8 +16,14 @@ import SwiftUI
 /// **接入点**：`SessionAttentionNotificationView` (T3 路由决策 §3.2 接入点 A)，
 /// `SessionHoverDashboardView` / `SessionListView` 接入点 B/C 待下次 session。
 ///
-/// **button click**：当前是视觉占位 (no-op + log)。下次 session 接 `HookSocketServer.shared.respondToIntervention`
-/// + `SessionStore.shared.process(.interventionResolved(...))`，参考 `SessionMonitor.swift:183-195`。
+/// **button click** (Phase 1·T7 follow-up + Phase 2·T2.2 后):
+/// 1. `HookSocketServer.shared.respondToIntervention(toolUseId:, decision:"answer",
+///    updatedInput:["choice": opt.id])` — sendHookResponse 写 BridgeResponse JSON
+///    `{"decision":{"answer":{"choice": ...}}}` 回 plugin → `island_response.handle_response`
+///    触发 17 个 action handler (Phase 1 静态 5 + Phase 2 dynamic 12) 之一.
+/// 2. `SessionStore.shared.process(.interventionResolved(...))` 让 view dismiss.
+///
+/// option.detail 字段渲染待 Phase 2·T2.5 跟进 (button 高度 30→44, 显示 title + detail 二行).
 struct MailAgentSessionView: View {
     let session: SessionState
     let sessionMonitor: SessionMonitor
@@ -352,8 +358,14 @@ struct MailAgentSessionView: View {
         .foregroundColor(.white.opacity(0.55))
     }
 
-    /// Intervention buttons row — 占位实现 (visual only, T4 next iteration wire to
-    /// HookSocketServer.shared.respondToIntervention + SessionStore.interventionResolved).
+    /// Intervention buttons row — Phase 2·T2.2 后 options 数量是 dynamic 1-3 (LLM
+    /// recommended_actions) 或 fallback 静态 5 (open_notion/create_draft/mark_done/
+    /// snooze_1h/open_mail). 这里 prefix(3) 限制视觉密度: 静态 5 模式只渲前 3 button,
+    /// snooze_1h/open_mail 走 expanded view; dynamic 模式 1-3 全显示.
+    ///
+    /// button click 真触发 plugin handler 走 `interventionButton` onTap 内
+    /// `HookSocketServer.shared.respondToIntervention` 路径 (Phase 1·T7 follow-up
+    /// commit bbcf85a ship). detail 字段渲染待 Phase 2·T2.5 跟进.
     private var interventionButtonRow: some View {
         let opts = session.intervention?.options ?? []
         return HStack(spacing: 8) {
@@ -365,12 +377,16 @@ struct MailAgentSessionView: View {
     }
 
     private func interventionButton(_ opt: SessionInterventionOption, isPrimary: Bool) -> some View {
-        Button {
+        // Phase 2·T2.5: button 高度 30 → 44, detail 非空时渲染 title + detail 二行
+        // (Apple Notification action style); detail 空时单行 title 居中 (44 维持高度
+        // 防 row 内静态/动态混排时高度跳变).
+        let hasDetail = !(opt.detail?.isEmpty ?? true)
+        return Button {
             // Phase 1·T7 follow-up (button real action wire, 2026-05-25):
             // 1. HookSocketServer.respondToIntervention 反向 socket response 回 plugin
             //    → plugin `_extract_choice({"decision":{"answer":{"choice": opt.id}}})` 拿 option id
             //    → `island_response.handle_response` 触发对应业务 handler
-            //      (open_mail / open_notion / create_draft / mark_done / snooze_1h)
+            //      (Phase 1 静态 5 + Phase 2 dynamic 12 = 17 个 handler)
             // 2. 本地 SessionStore.interventionResolved 让 view dismiss
             // toolUseId 来源: plugin envelope.py `to_wire_dict` 在 metadata 写 `tool_use_id =
             // "bridge-<envelope_id>"`, 跟 fork HookSocketServer line 1791 fallback 一致.
@@ -396,12 +412,21 @@ struct MailAgentSessionView: View {
                 }
             }
         } label: {
-            HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(opt.title)
                     .font(.system(size: 12, weight: .semibold))
+                    .lineLimit(1)
+                if hasDetail, let detail = opt.detail {
+                    Text(detail)
+                        .font(.system(size: 10, weight: .regular))
+                        .foregroundColor(
+                            (isPrimary ? Color.black : Color.white).opacity(0.55)
+                        )
+                        .lineLimit(1)
+                }
             }
             .padding(.horizontal, 12)
-            .frame(height: 30)
+            .frame(minWidth: 80, minHeight: 44, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(isPrimary ? Color.white : Color(red: 0.122, green: 0.141, blue: 0.169))
