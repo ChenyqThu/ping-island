@@ -8,6 +8,7 @@ import SwiftUI
 /// - `MailCompleted`                             → Scene 4 task complete (绿副标 click to jump)
 /// - `SyncFailed`                                → error scene (devbot + fail pip + error)
 /// - `DeadLetterAccum`                           → aggregate chip
+/// - `DailyDigest`                               → 今日总结 (counts chips + summary + bulk intervention buttons)
 /// - else / scenario 缺失                         → fallback (4 字段 minimal card)
 ///
 /// **数据来源**：`session.hookMetadata`，来自 HookEvent.metadata，来自 envelope.metadata
@@ -43,6 +44,8 @@ struct MailAgentSessionView: View {
                 errorLayout
             case "DeadLetterAccum":
                 deadLetterLayout
+            case "DailyDigest":
+                digestLayout
             default:
                 fallbackLayout
             }
@@ -67,6 +70,10 @@ struct MailAgentSessionView: View {
     private var accentKey: String { metaWithDefault("mailagent.accent", "coral") }
     private var errorText: String { meta("mailagent.error") }
     private var deadLetterCount: Int { Int(meta("mailagent.deadLetterCount")) ?? 0 }
+    private var digestUnread: Int { Int(meta("mailagent.digestUnread")) ?? 0 }
+    private var digestUrgent: Int { Int(meta("mailagent.digestUrgent")) ?? 0 }
+    private var digestHeadline: String { meta("mailagent.digestHeadline") }
+    private var digestSummary: String { meta("mailagent.aiSummary") }  // 复用 aiSummary 通道
 
     private func meta(_ key: String) -> String {
         session.hookMetadata[key] ?? ""
@@ -205,6 +212,63 @@ struct MailAgentSessionView: View {
                 Spacer(minLength: 0)
             }
         }
+    }
+
+    // MARK: - DailyDigest (今日总结: counts chips + summary + bulk intervention buttons)
+
+    /// Phase 3 DailyDigest layout (plan §5 决策点 5): 头(mascot + eyebrow "今日总结" +
+    /// headline) + counts chips (未读 / 紧急) + 2-4 句 summary + bulk action buttons.
+    /// bulk action 复用 `interventionButtonRow` (prefix(3) + respondToIntervention 回写),
+    /// 零新协议: plugin 端 `Intervention(options=[InterventionOption(id="bulk_*", ...)])` →
+    /// fork 原样渲染 + click 走相同 socket 路径 (envelope.metadata.digestBulk.<id>.ids 携带 ids).
+    private var digestLayout: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
+                mascotView
+                VStack(alignment: .leading, spacing: 2) {
+                    eyebrowLine(suffix: "今日总结")
+                    Text(digestHeadline.isEmpty ? "今日邮件汇总" : digestHeadline)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.white)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+            }
+            digestCountsRow
+            if !digestSummary.isEmpty {
+                Text(digestSummary)
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundColor(.white.opacity(0.72))
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            interventionButtonRow
+        }
+    }
+
+    private var digestCountsRow: some View {
+        HStack(spacing: 6) {
+            if digestUnread > 0 {
+                countChip("\(digestUnread) 未读", tint: Color(red: 0.479, green: 0.498, blue: 0.541))
+            }
+            if digestUrgent > 0 {
+                countChip("\(digestUrgent) 紧急", tint: Color(red: 0.898, green: 0.388, blue: 0.310))
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// counts chip — 照 priorityChip 风格 (实心 Capsule 染 tint, 白字).
+    private func countChip(_ text: String, tint: Color) -> some View {
+        Text(text)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundColor(.white.opacity(0.95))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(
+                Capsule().fill(tint.opacity(0.85))
+            )
     }
 
     // MARK: - Fallback (compact 4 字段)

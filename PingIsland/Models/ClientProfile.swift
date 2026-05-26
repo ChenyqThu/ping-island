@@ -1022,6 +1022,7 @@ enum ClientProfileRegistry {
                 HookInstallEventDescriptor(name: "MailCompleted",      templates: [.plain]),
                 HookInstallEventDescriptor(name: "SyncFailed",         templates: [.plain]),
                 HookInstallEventDescriptor(name: "DeadLetterAccum",    templates: [.plain]),
+                HookInstallEventDescriptor(name: "DailyDigest",        templates: [.plain]),
             ]
         ),
     ]
