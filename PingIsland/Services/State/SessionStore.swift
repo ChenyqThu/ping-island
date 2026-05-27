@@ -2351,30 +2351,60 @@ actor SessionStore {
     /// Periodically check active Claude sessions whose bridge process has died without
     /// sending a Stop event (crash, SIGKILL, terminal closed). End them so the bar
     /// doesn't keep showing dead sessions as still working.
+    /// Phase 3·Polish-2: mail session GC 闲置阈值 (12h)。mail 用户可能数小时不看,
+    /// 选保守值避免误删用户还想看的 completed mail; 超阈值无活动且非 attention 才回收。
+    private static let mailIdleTTL: TimeInterval = 12 * 60 * 60
+
     func pruneOrphanedSessions() {
+        var mailIdsToReclaim: [String] = []
         for (sessionId, var session) in sessions {
-            guard session.provider == .claude else { continue }
-            guard session.ingress != .nativeRuntime else { continue }
-            guard session.phase != .ended else { continue }
-            guard !session.needsManualAttention else { continue }
+            switch session.provider {
+            case .claude:
+                // claude orphan 逻辑 (Phase 3·Polish-2 前原样, 零变化): bridge 进程
+                // 死亡却没发 Stop (crash/SIGKILL/terminal closed) → 结束 session。
+                guard session.ingress != .nativeRuntime else { continue }
+                guard session.phase != .ended else { continue }
+                guard !session.needsManualAttention else { continue }
 
-            let idleSeconds = Date().timeIntervalSince(session.lastActivity)
-            guard idleSeconds >= 30 else { continue }
+                let idleSeconds = Date().timeIntervalSince(session.lastActivity)
+                guard idleSeconds >= 30 else { continue }
 
-            if let pid = session.pid, pid > 0 {
-                if Darwin.kill(pid_t(pid), 0) != 0 && errno == ESRCH {
-                    markSessionEnded(&session)
-                    sessions[sessionId] = session
+                if let pid = session.pid, pid > 0 {
+                    if Darwin.kill(pid_t(pid), 0) != 0 && errno == ESRCH {
+                        markSessionEnded(&session)
+                        sessions[sessionId] = session
+                    }
+                } else if session.phase.isActive, !sessionHasLiveExecutionEvidence(session) {
+                    // No PID available but session looks idle with no live evidence.
+                    // Transition from processing/compacting to idle so it doesn't
+                    // appear stuck as "working" indefinitely.
+                    if session.phase.canTransition(to: .idle) {
+                        session.phase = .idle
+                        sessions[sessionId] = session
+                    }
                 }
-            } else if session.phase.isActive, !sessionHasLiveExecutionEvidence(session) {
-                // No PID available but session looks idle with no live evidence.
-                // Transition from processing/compacting to idle so it doesn't
-                // appear stuck as "working" indefinitely.
-                if session.phase.canTransition(to: .idle) {
-                    session.phase = .idle
-                    sessions[sessionId] = session
-                }
+
+            case .mail:
+                // mail 无 bridge 进程 (plugin 单向 push), 故按 TTL 闲置回收, 而非 pid liveness。
+                // 条件 (全部满足): 超 mailIdleTTL 无活动 + 非 attention (needsManualAttention
+                // 覆盖 .waitingForInput/.waitingForApproval/待处理 intervention, 比单查
+                // phase != .waitingForInput 更严, 不删用户正交互的 mail)。
+                guard !session.needsManualAttention else { continue }
+                let idleSeconds = Date().timeIntervalSince(session.lastActivity)
+                guard idleSeconds > Self.mailIdleTTL else { continue }
+                mailIdsToReclaim.append(sessionId)
+
+            default:
+                // codex / copilot / kimi / gemini 等不在此 GC 范围, 各自路径处理。
+                continue
             }
+        }
+
+        // mail 回收: 真删字典条目释放内存 (区别于 claude markSessionEnded 保留条目),
+        // 并清掉关联 pending sync, 照 endOrphanedSessions 既有清理模式。
+        for id in mailIdsToReclaim {
+            sessions.removeValue(forKey: id)
+            cancelPendingSync(sessionId: id)
         }
     }
 
