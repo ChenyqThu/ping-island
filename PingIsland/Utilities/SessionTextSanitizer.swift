@@ -37,6 +37,23 @@ enum SessionTextSanitizer {
             with: " ",
             options: .regularExpression
         )
+        // Slash-command wrappers injected by Claude Code (/clear, /compact, custom
+        // commands): <command-name>…</command-name><command-message>…</command-message>
+        // <command-args>…</command-args> plus the local stdout echo. Strip whole
+        // elements (incl. content) so they never leak into titles/previews.
+        for tag in ["command-message", "command-name", "command-args", "local-command-stdout"] {
+            cleaned = cleaned.replacingOccurrences(
+                of: "(?is)<\(tag)>.*?</\(tag)>",
+                with: " ",
+                options: .regularExpression
+            )
+        }
+        // Truncated/unclosed command tag → strip to end (mirror <system-reminder> above).
+        cleaned = cleaned.replacingOccurrences(
+            of: #"(?is)<(?:command-message|command-name|command-args|local-command-stdout)\b.*$"#,
+            with: " ",
+            options: .regularExpression
+        )
         cleaned = cleaned
             .replacingOccurrences(of: "\r", with: " ")
             .replacingOccurrences(of: "\n", with: " ")

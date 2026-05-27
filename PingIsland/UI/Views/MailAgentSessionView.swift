@@ -14,8 +14,10 @@ import SwiftUI
 /// **数据来源**：`session.hookMetadata`，来自 HookEvent.metadata，来自 envelope.metadata
 /// (Plugin `src/notify/island_envelope.py` 端 `mailagent.*` namespace)。
 ///
-/// **接入点**：`SessionAttentionNotificationView` (T3 路由决策 §3.2 接入点 A)，
-/// `SessionHoverDashboardView` / `SessionListView` 接入点 B/C 待下次 session。
+/// **接入点**：`SessionAttentionNotificationView` (接入点 A)、`SessionHoverDashboardView`
+/// (接入点 B) 走本视图整卡渲染；`SessionListView.InstanceRow` (接入点 C, 2026-05-27) 改走
+/// 列表原生方案——经 `SessionState.mailListTitle` / `mailListPreview` 读同一批 `mailagent.*`
+/// metadata，保持列表行紧凑风格 (mascot + 主题 + 摘要/发件人 + 徽章)，不嵌整卡。
 ///
 /// **button click** (Phase 1·T7 follow-up + Phase 2·T2.2 后):
 /// 1. `HookSocketServer.shared.respondToIntervention(toolUseId:, decision:"answer",

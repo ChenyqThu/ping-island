@@ -1200,6 +1200,21 @@ struct InstanceRow: View {
     }
 
     private var previewLines: [QueuePreviewLine] {
+        // Mail push rows have no user/assistant turns; show a single AI-summary /
+        // sender line instead of the 你：/Claude： pair.
+        if session.isMailAgentSession {
+            guard let preview = session.mailListPreview else { return [] }
+            return [
+                QueuePreviewLine(
+                    id: "mail",
+                    prefix: nil,
+                    prefixColor: .clear,
+                    text: preview,
+                    textColor: .white.opacity(0.6)
+                )
+            ]
+        }
+
         var lines: [QueuePreviewLine] = []
 
         if let userLine = latestUserLine {

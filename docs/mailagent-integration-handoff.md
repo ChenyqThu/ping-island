@@ -244,8 +244,11 @@ xcodebuild 每个 commit 独立 SUCCEEDED；base brand（claude/codex/hermes 等
 | `87ca0b9` (Polish-1) | `MailAgentSessionView.swift` | 加 `case "ActionAcked"` ackedLayout，读 actionAckedChoice/Ok/error 显示成功✓/失败✗ + choice 可读文案 helper（8 映射） |
 | `95ba312` (Polish-2) | `SessionStore.swift` | `pruneOrphanedSessions` 拆 `switch provider`，新增 mail 分支（12h TTL + `!needsManualAttention` → `removeValue` 真删 + `cancelPendingSync`）；claude GC 字节级零变化 |
 | `159b1e2` (Polish-3) | `MailAgentBrandTests.swift` + `MailAgentSessionViewTests.swift` | 16 个新单测：brand 5-key 推导（含降级 .neutral）/ scenario→layout 路由（8 分支含 ActionAcked）/ button wire |
+| (pending, 2026-05-27) | `SessionState.swift` + `SessionListView.swift` + `SessionTextSanitizer.swift` | **接入点 C 列表预览修复**：mail 会话 `/ · /` → `InstanceRow` 经新增 `SessionState.mailListTitle/mailListPreview` 读 `mailagent.subject/aiSummary/sender` 显真实主题+摘要（列表原生，非整卡）；顺带 `SessionTextSanitizer` 剥离 `<command-message/name/args>`+`<local-command-stdout>` 斜杠命令包裹，修 `/clear` 标题残留 `<command-message>…`。+10 单测（4 mail list + 6 sanitizer，新建 `SessionTextSanitizerTests.swift`） |
 
 `PingIslandTests` bundle: **648 passed / 0 failed**（含 16 个新 mail 测试）。base regression：claude/codex/hermes 路径字节级零变化（lead diff review confirm）。
+
+> Polish-4（2026-05-27, 上表末行）后本地全量 `xcodebuild test -only-testing:PingIslandTests` → **`** TEST SUCCEEDED **` / 0 failed**（含本次 +10）。注：本机缺 team `2DKS5U9LV4` 的 "Mac Development" 证书，需 `CODE_SIGNING_ALLOWED=NO` 跑纯逻辑单测；未 commit（push 决定权保留给用户）。
 
 ### 8.3 新跨端契约（plugin 已发，fork 端消费状态）
 

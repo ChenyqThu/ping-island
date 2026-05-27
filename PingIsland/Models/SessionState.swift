@@ -37,6 +37,8 @@ struct SessionState: Equatable, Identifiable, Sendable {
     private nonisolated static let minimalCompactDelay: TimeInterval = 10 * 60
     private nonisolated static let autoArchiveDelay: TimeInterval = 30 * 60
     private nonisolated static let endedArchiveActionDelay: TimeInterval = 10 * 60
+    /// Mail 是一次性通知而非活会话，处理/展示后应快速退场（claude 用 30min auto-archive）。
+    private nonisolated static let mailAutoArchiveDelay: TimeInterval = 5 * 60
     private nonisolated static let codexContinuationPlaceholderHideWindow: TimeInterval = 10 * 60
     private nonisolated static let openCodeChildSessionHideWindow: TimeInterval = 120
 
@@ -219,12 +221,48 @@ struct SessionState: Equatable, Identifiable, Sendable {
         return sessionId
     }
 
-    /// Display title: summary > first user message > project name
+    /// Display title: mail subject > summary > first user message > project name
     nonisolated var displayTitle: String {
-        sessionName
+        if let mailListTitle {
+            return mailListTitle
+        }
+        return sessionName
             ?? SessionTextSanitizer.sanitizedDisplayText(conversationInfo.summary)
             ?? SessionTextSanitizer.sanitizedDisplayText(conversationInfo.firstUserMessage)
             ?? projectName
+    }
+
+    // MARK: - MailAgent list presentation
+    //
+    // Mail push sessions have no working dir / chat history; their subject, sender,
+    // and AI summary live in `hookMetadata["mailagent.*"]` (consumed by
+    // MailAgentSessionView). Surface them here so the opened-notch list (InstanceRow)
+    // shows a real subject + preview instead of the "/ · /" projectName fallback.
+
+    nonisolated var isMailAgentSession: Bool {
+        clientInfo.brand == .mail
+    }
+
+    /// Title for a mail push row: subject > sender name > brand label.
+    nonisolated var mailListTitle: String? {
+        guard isMailAgentSession else { return nil }
+        return SessionTextSanitizer.sanitizedDisplayText(hookMetadata["mailagent.subject"])
+            ?? SessionTextSanitizer.sanitizedDisplayText(hookMetadata["mailagent.senderName"])
+            ?? "MailAgent"
+    }
+
+    /// Single-line preview for a mail push row: AI summary > "name · address" > nil.
+    nonisolated var mailListPreview: String? {
+        guard isMailAgentSession else { return nil }
+        if let summary = SessionTextSanitizer.sanitizedDisplayText(hookMetadata["mailagent.aiSummary"]) {
+            return summary
+        }
+        let name = SessionTextSanitizer.sanitizedDisplayText(hookMetadata["mailagent.senderName"])
+        let address = SessionTextSanitizer.sanitizedDisplayText(hookMetadata["mailagent.sender"])
+        if let name, let address {
+            return "\(name) · \(address)"
+        }
+        return name ?? address
     }
 
     /// Codex subagent threads report depth starting at 1 for the first spawned child.
@@ -895,7 +933,7 @@ struct SessionState: Equatable, Identifiable, Sendable {
     }
 
     nonisolated var shouldHideProjectContextInUI: Bool {
-        clientInfo.isOpenClawGatewayClient
+        clientInfo.isOpenClawGatewayClient || isMailAgentSession
     }
 
     /// Latest hook bridge message formatted for compact notch display.
@@ -1076,7 +1114,8 @@ struct SessionState: Equatable, Identifiable, Sendable {
         if needsManualAttention {
             return false
         }
-        return Date().timeIntervalSince(lastActivity) >= Self.autoArchiveDelay
+        let delay = isMailAgentSession ? Self.mailAutoArchiveDelay : Self.autoArchiveDelay
+        return Date().timeIntervalSince(lastActivity) >= delay
     }
 
     /// Older background sessions collapse to a header-only presentation in compact surfaces.
@@ -1095,6 +1134,13 @@ struct SessionState: Equatable, Identifiable, Sendable {
 
     /// Whether the session list should offer a manual archive action for this row.
     nonisolated var shouldShowArchiveActionInPrimaryUI: Bool {
+        // Mail 是一次性通知, 非"活会话": 只要没有待你处理的项 (已处理 / 信息类如
+        // MailCompleted·DailyDigest·ActionAcked), 就始终给手动移除按钮, 不套用 claude
+        // 的 .ended 10min 延迟门槛 (否则 skip 后 10min 内无按钮可移除)。紧急待办
+        // (needsManualAttention) 仍占 attention, 不显示 archive 以防误清。
+        if isMailAgentSession {
+            return !needsManualAttention
+        }
         switch phase {
         case .idle:
             return true
