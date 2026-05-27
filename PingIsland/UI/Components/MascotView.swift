@@ -627,8 +627,19 @@ struct MascotView: View {
         case .kimi:
             drawKimi(in: context, canvasSize: canvasSize, time: time, mode: mode)
         case .mail:
-            // FE-2 stub: 暂留空，FE-3 commit 替换为 MailLogo imageset。
-            break
+            // MailLogo.imageset（@1x/@2x/@3x）已 ship，直接渲染品牌 logo。
+            let logo = context.resolve(Image("MailLogo"))
+            let logoSize = logo.size
+            let scale = min(canvasSize.width / logoSize.width, canvasSize.height / logoSize.height)
+            let drawW = logoSize.width * scale
+            let drawH = logoSize.height * scale
+            let rect = CGRect(
+                x: (canvasSize.width - drawW) / 2,
+                y: (canvasSize.height - drawH) / 2,
+                width: drawW,
+                height: drawH
+            )
+            context.draw(logo, in: rect)
         }
     }
 
