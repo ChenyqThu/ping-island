@@ -26,6 +26,7 @@ enum MascotClient: String, CaseIterable, Identifiable, Sendable {
     case trae
     case copilot
     case kimi
+    case mail
 
     static let allCases: [MascotClient] = [
         .claude,
@@ -40,6 +41,7 @@ enum MascotClient: String, CaseIterable, Identifiable, Sendable {
         .codebuddy,
         .copilot,
         .kimi,
+        .mail,
     ]
 
     var id: String { rawValue }
@@ -72,6 +74,8 @@ enum MascotClient: String, CaseIterable, Identifiable, Sendable {
             return "Copilot"
         case .kimi:
             return "Kimi CLI"
+        case .mail:
+            return "MailAgent"
         }
     }
 
@@ -103,6 +107,8 @@ enum MascotClient: String, CaseIterable, Identifiable, Sendable {
             return "GitHub Copilot Hooks 客户端"
         case .kimi:
             return "Kimi CLI 官方 hooks 与默认 Kimi 形象"
+        case .mail:
+            return "MailAgent 邮件接入 Island"
         }
     }
 
@@ -134,6 +140,8 @@ enum MascotClient: String, CaseIterable, Identifiable, Sendable {
             return .copilot
         case .kimi:
             return .kimi
+        case .mail:
+            return .mail
         }
     }
 
@@ -272,6 +280,7 @@ enum MascotKind: String, CaseIterable, Identifiable, Sendable {
     case codebuddy
     case copilot
     case kimi
+    case mail
 
     var id: String { rawValue }
 
@@ -301,6 +310,8 @@ enum MascotKind: String, CaseIterable, Identifiable, Sendable {
             return "Copilot"
         case .kimi:
             return "Kimi CLI"
+        case .mail:
+            return "MailAgent"
         }
     }
 
@@ -330,6 +341,8 @@ enum MascotKind: String, CaseIterable, Identifiable, Sendable {
             return "黑框眼镜机器人"
         case .kimi:
             return "Kimi 蓝色键盘球"
+        case .mail:
+            return "信封图标"
         }
     }
 
@@ -359,6 +372,9 @@ enum MascotKind: String, CaseIterable, Identifiable, Sendable {
             return Color(red: 1.0, green: 0.56, blue: 0.28)
         case .kimi:
             return Color(red: 0.96, green: 0.30, blue: 0.42)
+        case .mail:
+            // MailAgent brand 主色（与 SessionClientBrand.mail 视觉一致）
+            return Color(red: 0.38, green: 0.55, blue: 0.95)
         }
     }
 
@@ -610,6 +626,9 @@ struct MascotView: View {
             drawCopilot(in: context, canvasSize: canvasSize, time: time, mode: mode)
         case .kimi:
             drawKimi(in: context, canvasSize: canvasSize, time: time, mode: mode)
+        case .mail:
+            // FE-2 stub: 暂留空，FE-3 commit 替换为 MailLogo imageset。
+            break
         }
     }
 
