@@ -237,6 +237,16 @@ xcodebuild 每个 commit 独立 SUCCEEDED；base brand（claude/codex/hermes 等
 
 `pytest tests/notify/`: **260/260 passed**（含 PE-4 新增 13 个 test）。
 
+#### Phase 3 Polish（fork 端，后续追加，+455/-28）
+
+| Commit | 文件 | 一句话 |
+|---|---|---|
+| `87ca0b9` (Polish-1) | `MailAgentSessionView.swift` | 加 `case "ActionAcked"` ackedLayout，读 actionAckedChoice/Ok/error 显示成功✓/失败✗ + choice 可读文案 helper（8 映射） |
+| `95ba312` (Polish-2) | `SessionStore.swift` | `pruneOrphanedSessions` 拆 `switch provider`，新增 mail 分支（12h TTL + `!needsManualAttention` → `removeValue` 真删 + `cancelPendingSync`）；claude GC 字节级零变化 |
+| `159b1e2` (Polish-3) | `MailAgentBrandTests.swift` + `MailAgentSessionViewTests.swift` | 16 个新单测：brand 5-key 推导（含降级 .neutral）/ scenario→layout 路由（8 分支含 ActionAcked）/ button wire |
+
+`PingIslandTests` bundle: **648 passed / 0 failed**（含 16 个新 mail 测试）。base regression：claude/codex/hermes 路径字节级零变化（lead diff review confirm）。
+
 ### 8.3 新跨端契约（plugin 已发，fork 端消费状态）
 
 | 字段 / 事件 | 来源 | fork 消费 | 状态 |
@@ -244,20 +254,21 @@ xcodebuild 每个 commit 独立 SUCCEEDED；base brand（claude/codex/hermes 等
 | `mailagent.aiSummary` (AIDraftReady) | PE-2 `dispatch_ai_draft_ready` | `MailAgentSessionView.aiSummary` 读后 `draftPreviewCard` 渲染 | ✅ 完全对接 |
 | `AIDraftReady` scenario | PE-2 | `MailAgentSessionView:42 case "AIDraftReady": draftLayout` | ✅ 完全对接 |
 | `mailagent.snoozeReason` | PE-1 | 未读 | ⚠️ silent 向后兼容（MailCompleted 主路径已工作） |
-| `mailagent.actionAckedChoice/EnvelopeId/Ok` | PE-4 | 未读 | ⚠️ silent ACK（下 sprint 可在 `MailAgentSessionView` 加 ActionAcked layout 或 toast） |
+| `mailagent.actionAckedChoice/EnvelopeId/Ok` | PE-4 | Polish-1 `case "ActionAcked"` ackedLayout 读取 | ✅ 已对接（expand 态显示成功✓/失败✗ + choice 可读文案） |
 | `AIDraftStream` (`draftChunkText/Index`) | PE-2 | 走 fallback layout | ⚠️ 流式 chunk 在 fork UI 不显示（设计可接受，仅 AIDraftReady 需用户响应） |
 
 ### 8.4 已知 gap（下个 sprint 候选）
 
+> **Polish 已解决 3 项**（commit `87ca0b9`/`95ba312`/`159b1e2`）：~~ActionAcked silent 无 UI~~ → Polish-1 ackedLayout · ~~mail session 不被 GC~~ → Polish-2 12h TTL · ~~0 mail unit test~~ → Polish-3 16 个单测。剩余 gap：
+
 | Gap | 严重度 | Fix 建议 |
 |---|---|---|
 | FE-1 `containsManagedPluginDirectory` 检测的是**目录存在**而非 `manifest.json` 文件存在 | low | 改为 `fileManager.fileExists(atPath: url.appendingPathComponent("manifest.json").path)`，与 commit message 语义对齐（1 行） |
-| ActionAcked envelope 在 fork 端 silent 处理（无 UI 反馈） | low | 在 `MailAgentSessionView.swift` 加 `case "ActionAcked"` toast 渲染 |
 | `mailagent.snoozeReason` fork 端不区分 UI 文案 | low | `MailAgentSessionView` 完成态读 `hookMetadata["mailagent.snoozeReason"]` 显示 "已暂存 X" |
-| mail session 不会被 `pruneOrphanedSessions` GC（仅 claude provider 走 GC） | medium | `SessionStore.swift:2358` 加 mail provider 分支，可放宽 idle TTL（如 12h）后回收 |
 | brand 5-key 缺失 logger.warning（降级静默） | low | `HookSocketServer.swift:830 case .mail` else 分支加 telemetry |
-| 0 个 mail unit test（76 个 test 文件零覆盖） | medium | 至少补 brand 5-key 推导 + scenario 路由 + button wire 三类 |
 | reconnect queue maxlen 20 上限（plugin 端已加优先级保护，但绝对值仍可调） | low | 视实际丢消息率决定是否提高 maxlen |
+| AIDraftStream fork 端走 fallbackLayout（chunk 不显示） | low（设计可接受） | expand 态拼接 `mailagent.draftChunkText` 显示流式动画 |
+| 完整 DESIGN.md §7 per-mail collapsed dock | — | Phase 4 候选（见 §8.5），等用户用 P0 后真实反馈再决定 |
 
 ### 8.5 未来 Phase 4+ 候选（路径 B 后续）
 
