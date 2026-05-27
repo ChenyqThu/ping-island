@@ -46,6 +46,8 @@ struct MailAgentSessionView: View {
                 deadLetterLayout
             case "DailyDigest":
                 digestLayout
+            case "ActionAcked":
+                ackedLayout
             default:
                 fallbackLayout
             }
@@ -74,6 +76,9 @@ struct MailAgentSessionView: View {
     private var digestUrgent: Int { Int(meta("mailagent.digestUrgent")) ?? 0 }
     private var digestHeadline: String { meta("mailagent.digestHeadline") }
     private var digestSummary: String { meta("mailagent.aiSummary") }  // 复用 aiSummary 通道
+    private var actionAckedChoice: String { meta("mailagent.actionAckedChoice") }
+    private var actionAckedOk: Bool { meta("mailagent.actionAckedOk") == "true" }
+    private var actionAckedError: String { meta("mailagent.error") }  // 复用 error 通道 (失败时 ≤200 char)
 
     private func meta(_ key: String) -> String {
         session.hookMetadata[key] ?? ""
@@ -269,6 +274,68 @@ struct MailAgentSessionView: View {
             .background(
                 Capsule().fill(tint.opacity(0.85))
             )
+    }
+
+    // MARK: - ActionAcked (button 点击后 subprocess 成功/失败反馈, plugin dispatch_action_acked)
+
+    /// Phase 3·Polish-1: 用户点 interventionButton → plugin 跑 action subprocess →
+    /// 回发 `ActionAcked` envelope (metadata.actionAckedChoice / actionAckedOk / error)。
+    /// expand 态渲染 inline 卡片 (复用 completedLayout/errorLayout 视觉语言): 成功显 ✓ +
+    /// "已完成" + choice 可读文案; 失败显 ✗ + error 文案。MVP 轻量反馈, 不做 toast/动画系统。
+    private var ackedLayout: some View {
+        let ok = actionAckedOk
+        let successTint = Color(red: 0.365, green: 0.729, blue: 0.549)
+        let failTint = Color(red: 0.890, green: 0.384, blue: 0.384)
+        let tint = ok ? successTint : failTint
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top, spacing: 10) {
+                ZStack(alignment: .bottomTrailing) {
+                    mascotView
+                    pip(color: tint, pulses: false)
+                        .offset(x: 4, y: 4)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    eyebrowLine(suffix: ok ? "已完成" : "操作失败")
+                    HStack(alignment: .center, spacing: 6) {
+                        Image(systemName: ok ? "checkmark.circle.fill" : "xmark.circle.fill")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(tint)
+                        Text(ok
+                             ? Self.readableChoiceLabel(actionAckedChoice)
+                             : "操作失败")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(.white)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if !ok, !actionAckedError.isEmpty {
+                        Text(actionAckedError)
+                            .font(.system(size: 12, weight: .regular, design: .monospaced))
+                            .foregroundColor(.white.opacity(0.65))
+                            .lineLimit(3)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+        }
+    }
+
+    /// ActionAcked choice id → 中文可读文案 (plugin 17 个 action handler 子集)。
+    /// 未知 id 原样返回, 防止新增 handler 时 fork 端漏配导致空白。
+    /// `internal static` 便于单测 (Phase 3·Polish-3) 独立验证映射, 不依赖 SwiftUI 渲染。
+    static func readableChoiceLabel(_ choice: String) -> String {
+        switch choice {
+        case "mark_done":                return "标记完成"
+        case "create_draft":             return "草稿已创建"
+        case "open_mail":                return "已打开邮件"
+        case "add_to_calendar":          return "已加入日历"
+        case "archive_and_unsubscribe":  return "已归档退订"
+        case "open_notion":              return "已打开 Notion"
+        case "convert_to_notion_task":   return "已转 Notion 任务"
+        case "send_draft":               return "草稿已发送"
+        default:                         return choice.isEmpty ? "已完成" : choice
+        }
     }
 
     // MARK: - Fallback (compact 4 字段)
