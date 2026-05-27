@@ -31,24 +31,51 @@ struct MailAgentSessionView: View {
     var density: HoverPreviewDensity = .regular
     var onActionCompleted: () -> Void = {}
 
+    /// 渲染分支枚举 (scenario → layout 的单一真源)。`body` 与单测 (Phase 3·Polish-3)
+    /// 都走 `layoutKind(forScenario:)`, 避免 switch 在视图私有代码里无法独立验证。
+    enum LayoutKind: Equatable {
+        case attention      // MailReceivedUrgent / LLMReviewedUrgent
+        case draft          // AIDraftReady
+        case completed      // MailCompleted
+        case error          // SyncFailed
+        case deadLetter     // DeadLetterAccum
+        case digest         // DailyDigest
+        case acked          // ActionAcked (Phase 3·Polish-1)
+        case fallback       // else / scenario 缺失
+    }
+
+    /// scenario 字符串 → LayoutKind。纯函数, 无 SwiftUI 依赖, 便于路由单测。
+    static func layoutKind(forScenario scenario: String) -> LayoutKind {
+        switch scenario {
+        case "MailReceivedUrgent", "LLMReviewedUrgent": return .attention
+        case "AIDraftReady":                            return .draft
+        case "MailCompleted":                           return .completed
+        case "SyncFailed":                              return .error
+        case "DeadLetterAccum":                         return .deadLetter
+        case "DailyDigest":                             return .digest
+        case "ActionAcked":                             return .acked
+        default:                                        return .fallback
+        }
+    }
+
     var body: some View {
         Group {
-            switch scenario {
-            case "MailReceivedUrgent", "LLMReviewedUrgent":
+            switch Self.layoutKind(forScenario: scenario) {
+            case .attention:
                 attentionLayout
-            case "AIDraftReady":
+            case .draft:
                 draftLayout
-            case "MailCompleted":
+            case .completed:
                 completedLayout
-            case "SyncFailed":
+            case .error:
                 errorLayout
-            case "DeadLetterAccum":
+            case .deadLetter:
                 deadLetterLayout
-            case "DailyDigest":
+            case .digest:
                 digestLayout
-            case "ActionAcked":
+            case .acked:
                 ackedLayout
-            default:
+            case .fallback:
                 fallbackLayout
             }
         }
