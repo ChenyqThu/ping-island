@@ -1816,6 +1816,13 @@ struct HookInstaller {
             return false
         }
 
+        // mailagent 走 external producer 路径：MailAgent 自身在常驻 mail-sync 进程中
+        // 写出 ~/.mailagent/plugins/ping_island/manifest.json。Island 不写、不检 marker，
+        // 仅检测真实落地文件存在即认为已安装。
+        if profile.id == "mailagent" {
+            return true
+        }
+
         let marker = managedMarker(for: profile)
         let candidates = [
             url.appendingPathComponent("plugin.yaml"),
