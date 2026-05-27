@@ -165,6 +165,16 @@ struct NotchView: View {
             && !hasHumanIntervention
             && !hasCompletedReadyState
             && activeCompletionNotification == nil
+            && !hasRecentMailActivity  // P0-5: mail 5min 内 envelope 不隐藏 collapsed
+    }
+
+    /// mail 会话 5 分钟内有活动则保持 collapsed 可见，让 MascotView + SessionCountIndicator
+    /// 显示邮件通知，而不被 autoHideWhenIdle 整个隐藏。
+    private var hasRecentMailActivity: Bool {
+        let cutoff = Date().addingTimeInterval(-300) // 5 min
+        return sessionMonitor.instances.contains { state in
+            state.clientInfo.brand == .mail && state.lastActivity > cutoff
+        }
     }
 
     /// Most recently active live session that has a hook message we can surface in the compact notch.
