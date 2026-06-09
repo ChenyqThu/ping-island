@@ -211,7 +211,6 @@ final class SoundPackCatalog: NSObject, ObservableObject, NSSoundDelegate {
     @Published private(set) var availablePacks: [SoundPack] = []
 
     private let defaults = UserDefaults.standard
-    private var activeSound: NSSound?
     private var lastPlayedSoundPathByCategory: [String: String] = [:]
 
     private enum Keys {
@@ -300,17 +299,19 @@ final class SoundPackCatalog: NSObject, ObservableObject, NSSoundDelegate {
             return false
         }
 
-        sound.volume = volume
         sound.delegate = self
-        activeSound = sound
+        let didPlay = AppSoundPlayback.shared.play(sound, volume: volume)
+        if !didPlay {
+            sound.delegate = nil
+            return false
+        }
+
         lastPlayedSoundPathByCategory[category] = entry.file
-        return sound.play()
+        return true
     }
 
     func sound(_ sound: NSSound, didFinishPlaying flag: Bool) {
-        if activeSound === sound {
-            activeSound = nil
-        }
+        AppSoundPlayback.shared.clearIfActive(sound)
     }
 
     private func importedPackRoots() -> [URL] {

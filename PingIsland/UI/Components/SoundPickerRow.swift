@@ -69,10 +69,7 @@ struct SoundPickerRow: View {
                                 sound: sound,
                                 isSelected: selectedSound == sound
                             ) {
-                                // Play preview sound
-                                if let soundName = sound.soundName {
-                                    NSSound(named: soundName)?.play()
-                                }
+                                AppSettings.playNotificationSound(sound)
                                 selectedSound = sound
                                 AppSettings.notificationSound = sound
                             }

@@ -18,6 +18,7 @@ private let cornerRadiusInsets = (
 /// Keeps the compact center message slightly narrower than the full center slot
 /// so the closed notch matches the tighter visual balance used elsewhere.
 private let compactCenterContentInset: CGFloat = 14
+private let minimumClosedNotchFullContentWidth: CGFloat = 96
 
 struct OpenedPanelContentHeightPreferenceKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
@@ -456,6 +457,14 @@ struct NotchView: View {
                     scheduleDetachmentHintPresentationIfNeeded(delay: Self.detachmentHintRetryDelay)
                 }
             }
+            .onChange(of: viewModel.isQuietBackgroundPresentationActive) { _, isActive in
+                if isActive && viewModel.status != .opened {
+                    isVisible = false
+                } else {
+                    handleProcessingChange()
+                    scheduleDetachmentHintPresentationIfNeeded(delay: Self.detachmentHintRetryDelay)
+                }
+            }
             .onChange(of: viewModel.presentationMode) { _, _ in
                 scheduleDetachmentHintPresentationIfNeeded(delay: Self.detachmentHintRetryDelay)
             }
@@ -647,6 +656,9 @@ struct NotchView: View {
                     // Preserve the native-notch footprint without letting the
                     // empty closed state expand across the whole window.
                     .frame(width: closedInnerWidth, height: closedNotchSize.height)
+            } else if usesClosedIconOnlyLayout {
+                closedIconOnlyContent
+                    .frame(width: closedInnerWidth, height: closedNotchSize.height)
             } else {
                 HStack(spacing: 0) {
                     // Left side - pet always visible while closed.
@@ -690,6 +702,35 @@ struct NotchView: View {
             }
         }
         .frame(height: closedNotchSize.height)
+    }
+
+    private var usesClosedIconOnlyLayout: Bool {
+        viewModel.status != .opened
+            && closedNotchSize.width < minimumClosedNotchFullContentWidth
+    }
+
+    @ViewBuilder
+    private var closedIconOnlyContent: some View {
+        ZStack {
+            if hasManualAttentionIndicator {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: min(16, iconOnlySize), weight: .semibold))
+                    .foregroundStyle(closedIndicatorTone.emphasisColor)
+                    .accessibilityLabel("需要处理")
+            } else {
+                MascotView(
+                    kind: closedMascotKind,
+                    status: closedMascotStatus,
+                    size: iconOnlySize
+                )
+                .matchedGeometryEffect(id: "pet", in: activityNamespace, isSource: showsClosedLeadingIcon)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+    }
+
+    private var iconOnlySize: CGFloat {
+        max(12, min(petIconSize, closedInnerWidth))
     }
 
     private var sideWidth: CGFloat {
@@ -1332,12 +1373,12 @@ struct NotchView: View {
         if !hasPrimedSoundTransitions {
             previousProcessingIds = Set(
                 instances
-                    .filter { $0.phase == .processing || $0.phase == .compacting }
+                    .filter(\.phase.contributesToProcessingSoundEdge)
                     .map(\.stableId)
             )
             previousAttentionSoundIds = Set(
                 instances
-                    .filter { $0.needsApprovalResponse || ($0.phase == .waitingForInput && $0.intervention != nil) }
+                    .filter(SessionAttentionSoundEvaluator.shouldContributeToAttentionSoundEdge)
                     .map(\.stableId)
             )
             previousCompletionSoundIds = Set(
@@ -1359,12 +1400,10 @@ struct NotchView: View {
             return
         }
 
-        let processingSessions = instances.filter {
-            $0.phase == .processing || $0.phase == .compacting
-        }
-        let attentionSessions = instances.filter {
-            $0.needsApprovalResponse || ($0.phase == .waitingForInput && $0.intervention != nil)
-        }
+        let processingSessions = instances.filter(\.phase.contributesToProcessingSoundEdge)
+        let attentionSessions = instances.filter(
+            SessionAttentionSoundEvaluator.shouldContributeToAttentionSoundEdge
+        )
         let completedSessions = instances.filter { SessionCompletionStateEvaluator.isCompletedReadySession($0) }
         let resourceLimitedSessions = instances.filter {
             $0.phase == .compacting

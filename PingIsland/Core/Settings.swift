@@ -11,6 +11,7 @@ import Foundation
 
 enum AppSettingsDefaultKeys {
     nonisolated static let surfaceMode = "surfaceMode"
+    nonisolated static let notchModuleWidth = "notchModuleWidth"
     nonisolated static let floatingPetAnchor = "floatingPetAnchor"
     nonisolated static let floatingPetSizeMode = "floatingPetSizeMode"
     nonisolated static let presentationModeOnboardingPending = "presentationModeOnboardingPending"
@@ -81,6 +82,48 @@ enum NotificationSound: String, CaseIterable {
     var soundName: String? {
         self == .none ? nil : rawValue
     }
+}
+
+final class SoundPlaybackCoordinator {
+    private var activeSound: NSSound?
+
+    @discardableResult
+    func play(_ sound: NSSound, volume: Float) -> Bool {
+        stopActiveSound(except: sound)
+
+        if isActiveSound(sound), sound.isPlaying {
+            sound.stop()
+        }
+
+        sound.volume = volume
+        let didPlay = sound.play()
+        activeSound = didPlay ? sound : nil
+        return didPlay
+    }
+
+    func clearIfActive(_ sound: NSSound) {
+        guard isActiveSound(sound) else { return }
+        activeSound = nil
+    }
+
+    private func stopActiveSound(except sound: NSSound) {
+        guard let activeSound, !isSameSound(activeSound, sound) else { return }
+        if activeSound.isPlaying {
+            activeSound.stop()
+        }
+        self.activeSound = nil
+    }
+
+    private func isActiveSound(_ sound: NSSound) -> Bool {
+        guard let activeSound else { return false }
+        return isSameSound(activeSound, sound)
+    }
+
+    private func isSameSound(_ lhs: NSSound, _ rhs: NSSound) -> Bool { lhs === rhs }
+}
+
+enum AppSoundPlayback {
+    static let shared = SoundPlaybackCoordinator()
 }
 
 enum UsageValueMode: String, CaseIterable, Identifiable {
@@ -344,6 +387,9 @@ enum NotchPetStyle: String, CaseIterable, Identifiable {
 @MainActor
 final class AppSettingsStore: ObservableObject {
     static let shared = AppSettingsStore()
+    nonisolated static let defaultNotchModuleWidth: Double = 266
+    nonisolated static let minimumNotchModuleWidth: Double = 64
+    nonisolated static let maximumNotchModuleWidth: Double = 420
 
     private let defaults: UserDefaults
     private let bridgeRuntimeConfigWriter: (Bool) -> Void
@@ -389,6 +435,7 @@ final class AppSettingsStore: ObservableObject {
         static let usageValueMode = "usageValueMode"
         static let contentFontSize = "contentFontSize"
         static let maxPanelHeight = "maxPanelHeight"
+        static let notchModuleWidth = AppSettingsDefaultKeys.notchModuleWidth
         static let notchPetStyle = "notchPetStyle"
         static let notchDisplayMode = "notchDisplayMode"
         static let closedNotchTrailingContentMode = "closedNotchTrailingContentMode"
@@ -435,6 +482,7 @@ final class AppSettingsStore: ObservableObject {
         didSet {
             guard !isBootstrapping else { return }
             defaults.set(soundEnabled, forKey: Keys.soundEnabled)
+            recordTelemetrySettingChange(key: Keys.soundEnabled, value: soundEnabled.description)
         }
     }
 
@@ -507,6 +555,10 @@ final class AppSettingsStore: ObservableObject {
         didSet {
             guard !isBootstrapping else { return }
             defaults.set(processingStartSoundEnabled, forKey: Keys.processingStartSoundEnabled)
+            recordTelemetrySettingChange(
+                key: Keys.processingStartSoundEnabled,
+                value: processingStartSoundEnabled.description
+            )
         }
     }
 
@@ -514,6 +566,10 @@ final class AppSettingsStore: ObservableObject {
         didSet {
             guard !isBootstrapping else { return }
             defaults.set(attentionRequiredSoundEnabled, forKey: Keys.attentionRequiredSoundEnabled)
+            recordTelemetrySettingChange(
+                key: Keys.attentionRequiredSoundEnabled,
+                value: attentionRequiredSoundEnabled.description
+            )
         }
     }
 
@@ -521,6 +577,10 @@ final class AppSettingsStore: ObservableObject {
         didSet {
             guard !isBootstrapping else { return }
             defaults.set(taskCompletedSoundEnabled, forKey: Keys.taskCompletedSoundEnabled)
+            recordTelemetrySettingChange(
+                key: Keys.taskCompletedSoundEnabled,
+                value: taskCompletedSoundEnabled.description
+            )
         }
     }
 
@@ -528,6 +588,7 @@ final class AppSettingsStore: ObservableObject {
         didSet {
             guard !isBootstrapping else { return }
             defaults.set(taskErrorSoundEnabled, forKey: Keys.taskErrorSoundEnabled)
+            recordTelemetrySettingChange(key: Keys.taskErrorSoundEnabled, value: taskErrorSoundEnabled.description)
         }
     }
 
@@ -535,6 +596,10 @@ final class AppSettingsStore: ObservableObject {
         didSet {
             guard !isBootstrapping else { return }
             defaults.set(resourceLimitSoundEnabled, forKey: Keys.resourceLimitSoundEnabled)
+            recordTelemetrySettingChange(
+                key: Keys.resourceLimitSoundEnabled,
+                value: resourceLimitSoundEnabled.description
+            )
         }
     }
 
@@ -592,6 +657,7 @@ final class AppSettingsStore: ObservableObject {
         didSet {
             guard !isBootstrapping else { return }
             defaults.set(hideInFullscreen, forKey: Keys.hideInFullscreen)
+            recordTelemetrySettingChange(key: Keys.hideInFullscreen, value: hideInFullscreen.description)
         }
     }
 
@@ -607,6 +673,7 @@ final class AppSettingsStore: ObservableObject {
         didSet {
             guard !isBootstrapping else { return }
             defaults.set(autoCollapseOnLeave, forKey: Keys.autoCollapseOnLeave)
+            recordTelemetrySettingChange(key: Keys.autoCollapseOnLeave, value: autoCollapseOnLeave.description)
         }
     }
 
@@ -622,6 +689,10 @@ final class AppSettingsStore: ObservableObject {
         didSet {
             guard !isBootstrapping else { return }
             defaults.set(autoOpenCompletionPanel, forKey: Keys.autoOpenCompletionPanel)
+            recordTelemetrySettingChange(
+                key: Keys.autoOpenCompletionPanel,
+                value: autoOpenCompletionPanel.description
+            )
         }
     }
 
@@ -629,6 +700,10 @@ final class AppSettingsStore: ObservableObject {
         didSet {
             guard !isBootstrapping else { return }
             defaults.set(autoOpenCompactedNotificationPanel, forKey: Keys.autoOpenCompactedNotificationPanel)
+            recordTelemetrySettingChange(
+                key: Keys.autoOpenCompactedNotificationPanel,
+                value: autoOpenCompactedNotificationPanel.description
+            )
         }
     }
 
@@ -636,6 +711,7 @@ final class AppSettingsStore: ObservableObject {
         didSet {
             guard !isBootstrapping else { return }
             defaults.set(showAgentDetail, forKey: Keys.showAgentDetail)
+            recordTelemetrySettingChange(key: Keys.showAgentDetail, value: showAgentDetail.description)
         }
     }
 
@@ -698,6 +774,19 @@ final class AppSettingsStore: ObservableObject {
             }
             guard !isBootstrapping else { return }
             defaults.set(maxPanelHeight, forKey: Keys.maxPanelHeight)
+        }
+    }
+
+    @Published var notchModuleWidth: Double {
+        didSet {
+            let clamped = Self.normalizedNotchModuleWidth(notchModuleWidth)
+            if notchModuleWidth != clamped {
+                notchModuleWidth = clamped
+                return
+            }
+            guard !isBootstrapping else { return }
+            defaults.set(notchModuleWidth, forKey: Keys.notchModuleWidth)
+            recordTelemetrySettingChange(key: Keys.notchModuleWidth, value: "\(Int(notchModuleWidth))")
         }
     }
 
@@ -790,6 +879,10 @@ final class AppSettingsStore: ObservableObject {
         didSet {
             guard !isBootstrapping else { return }
             defaults.set(automaticUpdateChecksEnabled, forKey: Keys.automaticUpdateChecksEnabled)
+            recordTelemetrySettingChange(
+                key: Keys.automaticUpdateChecksEnabled,
+                value: automaticUpdateChecksEnabled.description
+            )
         }
     }
 
@@ -851,6 +944,7 @@ final class AppSettingsStore: ObservableObject {
         didSet {
             guard !isBootstrapping else { return }
             defaults.set(routePromptsToTerminal, forKey: Keys.routePromptsToTerminal)
+            recordTelemetrySettingChange(key: Keys.routePromptsToTerminal, value: routePromptsToTerminal.description)
             writeEffectiveBridgeRuntimeConfig()
         }
     }
@@ -861,6 +955,10 @@ final class AppSettingsStore: ObservableObject {
             defaults.set(
                 autoRoutePromptsToTerminalWhenIdleEnabled,
                 forKey: Keys.autoRoutePromptsToTerminalWhenIdleEnabled
+            )
+            recordTelemetrySettingChange(
+                key: Keys.autoRoutePromptsToTerminalWhenIdleEnabled,
+                value: autoRoutePromptsToTerminalWhenIdleEnabled.description
             )
             if !autoRoutePromptsToTerminalWhenIdleEnabled {
                 setIdleAutoRoutePromptsToTerminalActive(false)
@@ -1116,6 +1214,10 @@ final class AppSettingsStore: ObservableObject {
         return legacyOverrides
     }
 
+    nonisolated static func normalizedNotchModuleWidth(_ width: Double) -> Double {
+        min(max(width, minimumNotchModuleWidth), maximumNotchModuleWidth)
+    }
+
     private func applyIsland8BitStartSoundMigrationIfNeeded(for mode: SoundThemeMode) {
         guard mode == .island8Bit else { return }
         guard !containsPersistedValue(forKey: Keys.island8BitStartSoundMigrated) else { return }
@@ -1245,16 +1347,16 @@ final class AppSettingsStore: ObservableObject {
         ) ?? .menuSelect)
         _island8BitAttentionRequiredSound = Published(initialValue: Island8BitSound(
             rawValue: defaults.string(forKey: Keys.island8BitAttentionRequiredSound) ?? ""
-        ) ?? .itemPickup)
+        ) ?? .approvalAlert)
         _island8BitTaskCompletedSound = Published(initialValue: Island8BitSound(
             rawValue: defaults.string(forKey: Keys.island8BitTaskCompletedSound) ?? ""
-        ) ?? .winJingle)
+        ) ?? .submitBlip)
         _island8BitTaskErrorSound = Published(initialValue: Island8BitSound(
             rawValue: defaults.string(forKey: Keys.island8BitTaskErrorSound) ?? ""
         ) ?? .hurt)
         _island8BitResourceLimitSound = Published(initialValue: Island8BitSound(
             rawValue: defaults.string(forKey: Keys.island8BitResourceLimitSound) ?? ""
-        ) ?? .hurt)
+        ) ?? .completeDing)
         _soundThemeMode = Published(initialValue: resolvedSoundThemeMode)
         _selectedSoundPackPath = Published(initialValue: defaults.string(forKey: Keys.selectedSoundPackPath) ?? "")
         _hideInFullscreen = Published(initialValue: Self.boolValue(
@@ -1324,6 +1426,12 @@ final class AppSettingsStore: ObservableObject {
             exists: persistedKeys.contains(Keys.maxPanelHeight),
             default: 580
         ))
+        _notchModuleWidth = Published(initialValue: Self.normalizedNotchModuleWidth(Self.doubleValue(
+            from: defaults,
+            key: Keys.notchModuleWidth,
+            exists: persistedKeys.contains(Keys.notchModuleWidth),
+            default: Self.defaultNotchModuleWidth
+        )))
         _notchPetStyle = Published(initialValue: NotchPetStyle(rawValue: notchPetStyleRaw ?? "") ?? .cat)
         _notchDisplayMode = Published(initialValue: NotchDisplayMode(rawValue: notchDisplayModeRaw ?? "") ?? .compact)
         _closedNotchTrailingContentMode = Published(initialValue: ClosedNotchTrailingContentMode(
@@ -1448,9 +1556,11 @@ final class AppSettingsStore: ObservableObject {
 enum AppSettings {
     static var shared: AppSettingsStore { AppSettingsStore.shared }
     private static var bundledSoundCache: [String: NSSound] = [:]
-    nonisolated static let defaultSettingsWindowSize = CGSize(width: 648, height: 522)
-    nonisolated static let minimumSettingsWindowSize = CGSize(width: 648, height: 522)
+    nonisolated static let defaultSettingsWindowSize = CGSize(width: 880, height: 520)
+    nonisolated static let minimumSettingsWindowSize = CGSize(width: 820, height: 500)
     nonisolated static let maximumSettingsWindowSize = CGSize(width: 1440, height: 1100)
+    nonisolated static let notchModuleWidthRange =
+        AppSettingsStore.minimumNotchModuleWidth...AppSettingsStore.maximumNotchModuleWidth
 
     static var notificationSound: NotificationSound {
         get { shared.notificationSound }
@@ -1556,6 +1666,11 @@ enum AppSettings {
     static var maxPanelHeight: Double {
         get { shared.maxPanelHeight }
         set { shared.maxPanelHeight = newValue }
+    }
+
+    static var notchModuleWidth: Double {
+        get { shared.notchModuleWidth }
+        set { shared.notchModuleWidth = newValue }
     }
 
     static var notchPetStyle: NotchPetStyle {
@@ -1736,8 +1851,7 @@ enum AppSettings {
     static func playSound(named soundName: String?) {
         guard soundEnabled, let soundName else { return }
         guard let sound = NSSound(named: NSSound.Name(soundName)) else { return }
-        sound.volume = Float(soundVolume)
-        sound.play()
+        AppSoundPlayback.shared.play(sound, volume: Float(soundVolume))
     }
 
     static func playClientStartupSound() {
@@ -1787,11 +1901,7 @@ enum AppSettings {
         }
 
         bundledSoundCache[resourceName] = sound
-        if sound.isPlaying {
-            sound.stop()
-        }
-        sound.volume = Float(soundVolume)
-        sound.play()
+        AppSoundPlayback.shared.play(sound, volume: Float(soundVolume))
     }
 
     private static func loadBundledSound(named resourceName: String) -> NSSound? {

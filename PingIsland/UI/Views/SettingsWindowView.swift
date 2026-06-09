@@ -7,13 +7,14 @@ import UniformTypeIdentifiers
 
 enum SettingsCategory: String, CaseIterable, Identifiable {
     case general
-    case shortcuts
     case display
+    case analytics
     case mascot
     case sound
     case integration
     case remote
     case labs
+    case shortcuts
     case about
 
     var id: String { rawValue }
@@ -25,6 +26,7 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
         case .display: return "显示"
         case .mascot: return "宠物"
         case .sound: return "声音"
+        case .analytics: return "统计"
         case .integration: return "集成"
         case .remote: return "远程"
         case .labs: return "实验室"
@@ -39,6 +41,7 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
         case .display: return "显示器与位置"
         case .mascot: return "客户端宠物与动作"
         case .sound: return "通知与提示音"
+        case .analytics: return "Agent、Token 与工具"
         case .integration: return "Hooks 与 IDE 扩展"
         case .remote: return "SSH 主机与远程转发"
         case .labs: return "试验性特性"
@@ -53,6 +56,7 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
         case .display: return "rectangle.on.rectangle"
         case .mascot: return "face.smiling.fill"
         case .sound: return "speaker.wave.2.fill"
+        case .analytics: return "chart.bar.xaxis"
         case .integration: return "link.circle.fill"
         case .remote: return "network.badge.shield.half.filled"
         case .labs: return "flask.fill"
@@ -67,6 +71,7 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
         case .display: return Color(red: 0.46, green: 0.40, blue: 0.96)
         case .mascot: return Color(red: 0.91, green: 0.27, blue: 0.81)  // Pink
         case .sound: return Color(red: 0.22, green: 0.83, blue: 0.42)
+        case .analytics: return Color(red: 0.97, green: 0.70, blue: 0.22)
         case .integration: return Color(red: 0.16, green: 0.76, blue: 0.72)
         case .remote: return Color(red: 0.95, green: 0.54, blue: 0.20)
         case .labs: return Color(red: 0.82, green: 0.48, blue: 0.97)
@@ -104,7 +109,12 @@ struct ClosedNotchUsageAvailability: Equatable {
     var hasClaudeSevenDay = false
     var hasCodexSevenDay = false
 
+    @MainActor
     static func current() -> ClosedNotchUsageAvailability {
+        guard AppSettings.showUsage else {
+            return ClosedNotchUsageAvailability()
+        }
+
         let cachedClaudeSnapshot = UsageSnapshotCacheStore.loadClaude()
         let cachedCodexSnapshot = UsageSnapshotCacheStore.loadCodex()
         let claudeSnapshot = if cachedClaudeSnapshot?.sevenDay == nil {
@@ -261,7 +271,7 @@ final class SettingsPanelViewModel: ObservableObject {
             refreshCustomHookInstallations()
             refreshQoderCLIHookRefreshStatus()
             refreshBridgeHealthStatus()
-        case .general, .shortcuts, .mascot, .remote, .labs, .about:
+        case .general, .shortcuts, .mascot, .analytics, .remote, .labs, .about:
             break
         }
     }
@@ -656,7 +666,7 @@ private struct SoundSettingsContent: View {
     @ObservedObject private var soundPacks = SoundPackCatalog.shared
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 22) {
             SettingsSectionCard(title: "通知") {
                 SettingsToggleLine(
                     title: "启用提示音",
@@ -679,13 +689,14 @@ private struct SoundSettingsContent: View {
                     value: $settings.soundVolume,
                     range: 0...1,
                     step: 0.05,
-                    format: { "\(Int(($0 * 100).rounded()))%" }
+                    format: { "\(Int(($0 * 100).rounded()))%" },
+                    showsTickMarks: true
                 )
             }
 
             if settings.soundThemeMode == .builtIn {
-                SettingsSectionCard(title: "阶段音效") {
-                    ForEach(NotificationEvent.allCases) { event in
+                SoundEventSection(title: "阶段音效") {
+                    ForEach(Array(NotificationEvent.allCases.enumerated()), id: \.element.id) { index, event in
                         SoundEventSettingsLine(
                             event: event,
                             isEnabled: soundEnabledBinding(for: event),
@@ -693,30 +704,31 @@ private struct SoundSettingsContent: View {
                         ) {
                             AppSettings.playSound(for: event)
                         }
+
+                        if index < NotificationEvent.allCases.count - 1 {
+                            SettingsLineDivider()
+                        }
                     }
                 }
             } else if settings.soundThemeMode == .island8Bit {
                 SettingsSectionCard(title: "客户端启动音") {
-                    SettingsActionLine(
-                        title: "固定启动音",
-                        subtitle: "使用内置 8-bit 启动旋律。应用启动时会自动播放，也可以在这里试听。"
-                    ) {
+                    SoundStartupLine {
                         AppSettings.playClientStartupSound()
-                    } accessory: {
-                        Image(systemName: "play.fill")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundColor(.white.opacity(0.72))
                     }
                 }
 
-                SettingsSectionCard(title: "阶段音效") {
-                    ForEach(NotificationEvent.allCases) { event in
+                SoundEventSection(title: "阶段音效") {
+                    ForEach(Array(NotificationEvent.allCases.enumerated()), id: \.element.id) { index, event in
                         BundledSoundEventLine(
                             event: event,
                             isEnabled: soundEnabledBinding(for: event),
                             selectedSound: bundledSoundBinding(for: event)
                         ) {
                             AppSettings.playSound(for: event)
+                        }
+
+                        if index < NotificationEvent.allCases.count - 1 {
+                            SettingsLineDivider()
                         }
                     }
                 }
@@ -743,8 +755,8 @@ private struct SoundSettingsContent: View {
                     }
                 }
 
-                SettingsSectionCard(title: "阶段映射") {
-                    ForEach(NotificationEvent.allCases) { event in
+                SoundEventSection(title: "阶段映射") {
+                    ForEach(Array(NotificationEvent.allCases.enumerated()), id: \.element.id) { index, event in
                         SoundPackEventLine(
                             event: event,
                             isEnabled: Binding(
@@ -753,6 +765,10 @@ private struct SoundSettingsContent: View {
                             )
                         ) {
                             AppSettings.playSound(for: event)
+                        }
+
+                        if index < NotificationEvent.allCases.count - 1 {
+                            SettingsLineDivider()
                         }
                     }
                 }
@@ -848,6 +864,1290 @@ private struct SoundSettingsContent: View {
     }
 }
 
+@MainActor
+private final class AgentUsageAnalyticsViewModel: ObservableObject {
+    @Published var selectedRange: AgentUsageRange = .sevenDays
+    @Published private(set) var snapshot = AgentUsageDashboardSnapshot.empty(range: .sevenDays)
+    @Published private(set) var isRefreshing = false
+    @Published private(set) var hasLoadedSnapshot = false
+
+    private var refreshTask: Task<Void, Never>?
+
+    var isInitialLoading: Bool {
+        isRefreshing && !hasLoadedSnapshot
+    }
+
+    func refresh() {
+        refreshTask?.cancel()
+        let range = selectedRange
+        isRefreshing = true
+        refreshTask = Task { [weak self] in
+            let nextSnapshot = await AgentUsageStore.shared.snapshot(range: range)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                self?.snapshot = nextSnapshot
+                self?.hasLoadedSnapshot = true
+                self?.isRefreshing = false
+            }
+        }
+    }
+
+    func selectRange(_ range: AgentUsageRange) {
+        guard selectedRange != range else { return }
+        selectedRange = range
+        refresh()
+    }
+
+    deinit {
+        refreshTask?.cancel()
+    }
+}
+
+private struct AgentUsageAnalyticsContent: View {
+    @StateObject private var viewModel = AgentUsageAnalyticsViewModel()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(appLocalized: "统计")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundColor(.white.opacity(0.94))
+
+                Text(appLocalized: "查看 Agent、Token、工具调用与活跃概览")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.white.opacity(0.48))
+            }
+
+            AgentUsageSummaryCards(snapshot: viewModel.snapshot)
+
+            spendCard
+
+            activityMapCard
+
+            overviewCard
+
+            HStack(alignment: .top, spacing: 18) {
+                rankingCard(
+                    title: "Agent 类型排行",
+                    items: viewModel.snapshot.topAgents,
+                    emptyTitle: "还没有可展示的 Agent 数据",
+                    tint: SettingsCategory.analytics.tint
+                )
+                .frame(maxWidth: .infinity)
+
+                rankingCard(
+                    title: "工具调用 Top 5",
+                    items: viewModel.snapshot.topTools,
+                    emptyTitle: "还没有可展示的工具调用",
+                    tint: TerminalColors.blue
+                )
+                .frame(maxWidth: .infinity)
+            }
+        }
+        .overlay {
+            if viewModel.isInitialLoading {
+                AgentUsageLoadingOverlay()
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.18), value: viewModel.isInitialLoading)
+        .onAppear {
+            viewModel.refresh()
+        }
+    }
+
+    private var activityMapCard: some View {
+        SettingsSectionCard(title: "活跃地图") {
+            AgentUsageHeatmapView(days: viewModel.snapshot.heatmapDays)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 16)
+        }
+    }
+
+    private var spendCard: some View {
+        SettingsSectionCard(title: "Token 费用预估") {
+            AgentUsageSpendPanel(summary: viewModel.snapshot.spendSummary)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 16)
+        }
+    }
+
+    private var overviewCard: some View {
+        SettingsSectionCard(title: "概览") {
+            AgentUsageRangeControl(
+                selectedRange: viewModel.selectedRange,
+                isRefreshing: viewModel.isRefreshing,
+                selectRange: viewModel.selectRange,
+                refresh: viewModel.refresh
+            )
+        } content: {
+            VStack(spacing: 0) {
+                AgentUsageOverviewLine(
+                    icon: "person.crop.circle",
+                    title: "Agent 类型",
+                    value: "\(viewModel.snapshot.topAgents.count)",
+                    subtitle: "本周期出现的客户端类型"
+                )
+                AgentUsageInsetDivider()
+                AgentUsageOverviewLine(
+                    icon: "bubble.left.and.bubble.right",
+                    title: "会话数",
+                    value: AgentUsageFormat.compactCount(viewModel.snapshot.sessionCount),
+                    subtitle: "按 agent 类型去重后的会话"
+                )
+                AgentUsageInsetDivider()
+                AgentUsageOverviewLine(
+                    icon: "wrench.and.screwdriver",
+                    title: "工具使用",
+                    value: AgentUsageFormat.compactCount(viewModel.snapshot.toolUseCount),
+                    subtitle: "去重后的工具调用次数"
+                )
+                AgentUsageInsetDivider()
+                AgentUsageOverviewLine(
+                    icon: "cube.transparent",
+                    title: "Token 消耗",
+                    value: AgentUsageFormat.compactTokenCount(viewModel.snapshot.tokenTotals.resolvedTotal),
+                    subtitle: "Codex 累计快照的本地增量"
+                )
+                AgentUsageInsetDivider()
+                AgentUsageTokenSplitLine(totals: viewModel.snapshot.tokenTotals)
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 8)
+        }
+    }
+
+    private func rankingCard(
+        title: String,
+        items: [AgentUsageRankItem],
+        emptyTitle: String,
+        tint: Color
+    ) -> some View {
+        SettingsSectionCard(title: title) {
+            AgentUsageRankingList(
+                items: items,
+                emptyTitle: emptyTitle,
+                tint: tint
+            )
+            .padding(.horizontal, 18)
+            .padding(.vertical, 8)
+        }
+    }
+}
+
+private struct AgentUsageLoadingOverlay: View {
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(Color.black.opacity(0.22))
+                .background(
+                    SettingsGlassSurface(material: .hudWindow, blendingMode: .withinWindow)
+                        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                        .opacity(0.90)
+                )
+
+            VStack(spacing: 10) {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(.white.opacity(0.84))
+
+                Text(appLocalized: "正在加载统计")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.72))
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 14)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color.white.opacity(0.08))
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
+                    )
+            )
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .allowsHitTesting(true)
+    }
+}
+
+private struct AgentUsageRangeControl: View {
+    let selectedRange: AgentUsageRange
+    let isRefreshing: Bool
+    let selectRange: (AgentUsageRange) -> Void
+    let refresh: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Picker(AppLocalization.string("统计范围"), selection: Binding(
+                get: { selectedRange },
+                set: { selectRange($0) }
+            )) {
+                ForEach(AgentUsageRange.allCases) { range in
+                    Text(appLocalized: range.title).tag(range)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(width: 186)
+
+            Button(action: refresh) {
+                Image(systemName: isRefreshing ? "arrow.triangle.2.circlepath" : "arrow.clockwise")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.72))
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(AppLocalization.string("刷新本地统计"))
+        }
+    }
+}
+
+private struct AgentUsageSummaryCards: View {
+    let snapshot: AgentUsageDashboardSnapshot
+
+    private let spacing: CGFloat = 16
+    private let wideCardWidth: CGFloat = 220
+    private let twoColumnMinWidth: CGFloat = 176
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: spacing) {
+                tokenCard
+                    .frame(width: wideCardWidth)
+                agentCard
+                    .frame(width: wideCardWidth)
+                toolCard
+                    .frame(width: wideCardWidth)
+                sessionCard
+                    .frame(width: wideCardWidth)
+            }
+
+            LazyVGrid(
+                columns: [
+                    GridItem(.flexible(minimum: twoColumnMinWidth), spacing: spacing),
+                    GridItem(.flexible(minimum: twoColumnMinWidth), spacing: spacing),
+                ],
+                alignment: .leading,
+                spacing: spacing
+            ) {
+                tokenCard
+                agentCard
+                toolCard
+                sessionCard
+            }
+
+            VStack(spacing: spacing) {
+                tokenCard
+                agentCard
+                toolCard
+                sessionCard
+            }
+        }
+    }
+
+    private var tokenCard: some View {
+        AgentUsageSummaryCard(
+            icon: "cube.transparent",
+            title: "Token 消耗",
+            value: AgentUsageFormat.compactTokenCount(snapshot.tokenTotals.resolvedTotal),
+            subtitle: AppLocalization.format(
+                "输入 %@ / 输出 %@",
+                AgentUsageFormat.compactTokenCount(snapshot.tokenTotals.input),
+                AgentUsageFormat.compactTokenCount(snapshot.tokenTotals.output)
+            ),
+            trendValues: snapshot.trendPoints.map(\.tokenTotal),
+            tint: SettingsCategory.analytics.tint
+        )
+    }
+
+    private var agentCard: some View {
+        AgentUsageSummaryCard(
+            icon: "person.crop.circle",
+            title: "活跃 Agent",
+            value: "\(snapshot.topAgents.count)",
+            subtitle: "本周期出现的客户端类型",
+            trendValues: snapshot.trendPoints.map(\.agentCount),
+            tint: TerminalColors.blue
+        )
+    }
+
+    private var toolCard: some View {
+        AgentUsageSummaryCard(
+            icon: "wrench.and.screwdriver",
+            title: "工具调用",
+            value: AgentUsageFormat.compactCount(snapshot.toolUseCount),
+            subtitle: "去重后的工具调用次数",
+            trendValues: snapshot.trendPoints.map(\.toolUseCount),
+            tint: TerminalColors.amber
+        )
+    }
+
+    private var sessionCard: some View {
+        AgentUsageSummaryCard(
+            icon: "bubble.left.and.bubble.right",
+            title: "会话数",
+            value: AgentUsageFormat.compactCount(snapshot.sessionCount),
+            subtitle: "按 agent 类型去重后的会话",
+            trendValues: snapshot.trendPoints.map(\.sessionCount),
+            tint: TerminalColors.green
+        )
+    }
+}
+
+private struct AgentUsageSummaryCard: View {
+    let icon: String
+    let title: String
+    let value: String
+    let subtitle: String
+    let trendValues: [Int]
+    let tint: Color
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 14) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(tint.opacity(0.22))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .strokeBorder(tint.opacity(0.28), lineWidth: 1)
+                    )
+
+                Image(systemName: icon)
+                    .font(.system(size: 20, weight: .medium))
+                    .foregroundColor(tint.opacity(0.94))
+            }
+            .frame(width: 46, height: 46)
+
+            VStack(alignment: .leading, spacing: 7) {
+                Text(appLocalized: title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.58))
+                    .lineLimit(1)
+
+                Text(verbatim: value)
+                    .font(.system(size: 24, weight: .bold, design: .rounded))
+                    .foregroundColor(.white.opacity(0.94))
+                    .monospacedDigit()
+                    .minimumScaleFactor(0.56)
+                    .lineLimit(1)
+                    .help(value)
+
+                Text(appLocalized: subtitle)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.white.opacity(0.42))
+                    .lineLimit(2)
+            }
+            .layoutPriority(1)
+
+            Spacer(minLength: 0)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, minHeight: 112, alignment: .topLeading)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color.white.opacity(0.045))
+                .overlay(
+                    SettingsGlassSurface(material: .hudWindow, blendingMode: .withinWindow)
+                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .opacity(0.90)
+                )
+                .overlay(alignment: .bottomTrailing) {
+                    AgentUsageSparklineBackdrop(values: trendValues, tint: tint)
+                        .frame(width: 118, height: 58)
+                        .padding(.trailing, 10)
+                        .padding(.bottom, 8)
+                        .opacity(0.82)
+                }
+                .overlay(
+                    LinearGradient(
+                        colors: [
+                            tint.opacity(0.13),
+                            Color.white.opacity(0.035),
+                            Color.black.opacity(0.035)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(tint.opacity(0.18), lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(0.14), radius: 16, y: 8)
+    }
+}
+
+private struct AgentUsageSpendPanel: View {
+    let summary: AgentUsageSpendSummary
+
+    private let columns = [
+        GridItem(.flexible(minimum: 132), spacing: 14),
+        GridItem(.flexible(minimum: 132), spacing: 14),
+        GridItem(.flexible(minimum: 132), spacing: 14),
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
+                AgentUsageSpendMetricTile(title: "今日", metric: summary.today)
+                AgentUsageSpendMetricTile(title: "7 天费用", metric: summary.sevenDays)
+                AgentUsageSpendMetricTile(title: "30 天费用", metric: summary.thirtyDays)
+            }
+
+            AgentUsageSpendBarChart(points: summary.dailyPoints)
+                .frame(height: 104)
+                .padding(.top, 2)
+
+            AgentUsageSpendFooter(summary: summary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct AgentUsageSpendFooter: View {
+    let summary: AgentUsageSpendSummary
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            footerLine
+
+            VStack(alignment: .leading, spacing: 4) {
+                footerAmounts
+                pricingLabel
+            }
+        }
+    }
+
+    private var footerLine: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            footerAmounts
+            Spacer(minLength: 8)
+            pricingLabel
+        }
+    }
+
+    private var footerAmounts: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(verbatim: AppLocalization.format(
+                "30 天：%@ Tokens",
+                AgentUsageFormat.compactTokenCount(summary.thirtyDays.tokenTotals.resolvedTotal)
+            ))
+                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .foregroundColor(.white.opacity(0.80))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+
+            Text(verbatim: AppLocalization.format(
+                "· %@ 预估",
+                AgentUsageFormat.compactUSD(summary.thirtyDays.estimatedUSD)
+            ))
+                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .foregroundColor(TerminalColors.blue.opacity(0.92))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+        }
+        .help(exactSummaryHelp)
+    }
+
+    private var pricingLabel: some View {
+        Text(appLocalized: AgentUsageCostEstimator.blendedCodexClaudePricing.label)
+            .font(.system(size: 11, weight: .medium))
+            .foregroundColor(.white.opacity(0.42))
+            .lineLimit(1)
+            .truncationMode(.middle)
+    }
+
+    private var exactSummaryHelp: String {
+        let tokenText = AgentUsageFormat.integer(summary.thirtyDays.tokenTotals.resolvedTotal)
+        let costText = AppLocalization.format("· %@ 预估", AgentUsageFormat.usd(summary.thirtyDays.estimatedUSD))
+        return "\(tokenText) \(costText)"
+    }
+}
+
+private struct AgentUsageSpendMetricTile: View {
+    let title: String
+    let metric: AgentUsageCostMetric
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(appLocalized: title)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(.white.opacity(0.58))
+                .lineLimit(1)
+
+            Text(verbatim: AgentUsageFormat.compactUSD(metric.estimatedUSD))
+                .font(.system(size: 24, weight: .bold, design: .rounded))
+                .foregroundColor(.white.opacity(0.94))
+                .monospacedDigit()
+                .minimumScaleFactor(0.56)
+                .lineLimit(1)
+                .help(AgentUsageFormat.usd(metric.estimatedUSD))
+
+            Text(verbatim: AppLocalization.format(
+                "%@ Tokens",
+                AgentUsageFormat.compactTokenCount(metric.tokenTotals.resolvedTotal)
+            ))
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(.white.opacity(0.42))
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+                .help(AgentUsageFormat.integer(metric.tokenTotals.resolvedTotal))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct AgentUsageSpendBarChart: View {
+    let points: [AgentUsageDailySpendPoint]
+
+    var body: some View {
+        GeometryReader { proxy in
+            let maxTokens = max(points.map(\.tokenTotal).max() ?? 0, 1)
+            let barSpacing: CGFloat = 4
+            let barWidth = max(4, (proxy.size.width - CGFloat(max(points.count - 1, 0)) * barSpacing) / CGFloat(max(points.count, 1)))
+
+            HStack(alignment: .bottom, spacing: barSpacing) {
+                ForEach(points) { point in
+                    let tokenShare = CGFloat(point.tokenTotal) / CGFloat(maxTokens)
+                    let barHeight = max(point.tokenTotal > 0 ? 5 : 2, proxy.size.height * max(0.02, tokenShare))
+
+                    RoundedRectangle(cornerRadius: min(4, barWidth * 0.45), style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: point.tokenTotal > 0 ? [
+                                    Color.white.opacity(0.92),
+                                    TerminalColors.blue.opacity(0.58),
+                                    TerminalColors.blue.opacity(0.78)
+                                ] : [
+                                    Color.white.opacity(0.18),
+                                    Color.white.opacity(0.10)
+                                ],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                        .overlay(alignment: .top) {
+                            RoundedRectangle(cornerRadius: min(4, barWidth * 0.45), style: .continuous)
+                                .fill(Color.white.opacity(point.tokenTotal > 0 ? 0.18 : 0.05))
+                                .frame(height: min(5, max(2, barHeight * 0.28)))
+                        }
+                        .frame(width: barWidth, height: barHeight)
+                        .help(AppLocalization.format(
+                            "%@ · %@ Tokens · %@",
+                            AgentUsageFormat.shortDate(point.date),
+                            AgentUsageFormat.compactTokenCount(point.tokenTotal),
+                            AgentUsageFormat.usd(point.estimatedUSD)
+                        ))
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+private struct AgentUsageSparklineBackdrop: View {
+    let values: [Int]
+    let tint: Color
+
+    var body: some View {
+        GeometryReader { proxy in
+            let points = normalizedPoints(in: proxy.size)
+            ZStack {
+                if points.count > 1 {
+                    AgentUsageSparklineFill(points: points)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    tint.opacity(0.24),
+                                    tint.opacity(0.05),
+                                    .clear
+                                ],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+
+                    AgentUsageSparklineStroke(points: points)
+                        .stroke(
+                            LinearGradient(
+                                colors: [
+                                    tint.opacity(0.18),
+                                    tint.opacity(0.64),
+                                    tint.opacity(0.24)
+                                ],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            ),
+                            style: StrokeStyle(lineWidth: 1.4, lineCap: .round, lineJoin: .round)
+                        )
+                }
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    private func normalizedPoints(in size: CGSize) -> [CGPoint] {
+        let usableValues = values.isEmpty ? [0, 0] : values
+        let maxValue = max(usableValues.max() ?? 0, 1)
+        let minValue = usableValues.min() ?? 0
+        let range = max(maxValue - minValue, 1)
+        let count = max(usableValues.count - 1, 1)
+
+        return usableValues.enumerated().map { index, value in
+            let x = CGFloat(index) / CGFloat(count) * size.width
+            let normalizedY = CGFloat(value - minValue) / CGFloat(range)
+            let y = size.height - normalizedY * (size.height * 0.72) - size.height * 0.10
+            return CGPoint(x: x, y: y)
+        }
+    }
+}
+
+private struct AgentUsageSparklineStroke: Shape {
+    let points: [CGPoint]
+
+    func path(in rect: CGRect) -> Path {
+        smoothPath(points: points)
+    }
+}
+
+private struct AgentUsageSparklineFill: Shape {
+    let points: [CGPoint]
+
+    func path(in rect: CGRect) -> Path {
+        guard let first = points.first, let last = points.last else { return Path() }
+        var path = smoothPath(points: points)
+        path.addLine(to: CGPoint(x: last.x, y: rect.maxY))
+        path.addLine(to: CGPoint(x: first.x, y: rect.maxY))
+        path.closeSubpath()
+        return path
+    }
+}
+
+private func smoothPath(points: [CGPoint]) -> Path {
+    var path = Path()
+    guard let first = points.first else { return path }
+    path.move(to: first)
+
+    guard points.count > 1 else { return path }
+
+    for index in 1..<points.count {
+        let previous = points[index - 1]
+        let current = points[index]
+        let midX = (previous.x + current.x) / 2
+        path.addCurve(
+            to: current,
+            control1: CGPoint(x: midX, y: previous.y),
+            control2: CGPoint(x: midX, y: current.y)
+        )
+    }
+
+    return path
+}
+
+private struct AgentUsageOverviewLine: View {
+    let icon: String
+    let title: String
+    let value: String
+    let subtitle: String
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(Color.white.opacity(0.07))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
+                    )
+                Image(systemName: icon)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(.white.opacity(0.72))
+            }
+            .frame(width: 32, height: 32)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(appLocalized: title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.76))
+                    .lineLimit(1)
+                Text(appLocalized: subtitle)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.white.opacity(0.42))
+                    .lineLimit(1)
+            }
+            .layoutPriority(1)
+
+            Spacer(minLength: 12)
+
+            Text(verbatim: value)
+                .font(.system(size: 22, weight: .bold, design: .rounded))
+                .foregroundColor(.white.opacity(0.92))
+                .monospacedDigit()
+                .minimumScaleFactor(0.56)
+                .lineLimit(1)
+                .frame(minWidth: 56, idealWidth: 86, alignment: .trailing)
+                .help(value)
+        }
+        .padding(.vertical, 10)
+    }
+}
+
+private struct AgentUsageMetricLine: View {
+    let title: String
+    let value: String
+    let subtitle: String
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 14) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(appLocalized: title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.72))
+                Text(appLocalized: subtitle)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.white.opacity(0.42))
+                    .lineLimit(2)
+            }
+            .layoutPriority(1)
+
+            Spacer(minLength: 12)
+
+            Text(verbatim: value)
+                .font(.system(size: 22, weight: .bold, design: .rounded))
+                .foregroundColor(.white.opacity(0.92))
+                .monospacedDigit()
+                .minimumScaleFactor(0.56)
+                .lineLimit(1)
+                .frame(minWidth: 56, idealWidth: 86, alignment: .trailing)
+                .help(value)
+        }
+        .padding(.vertical, 11)
+    }
+}
+
+private struct AgentUsageTokenSplitLine: View {
+    let totals: AgentUsageTokenTotals
+
+    var body: some View {
+        HStack(spacing: 16) {
+            AgentUsageTokenPill(
+                title: "输入 Token",
+                value: AgentUsageFormat.compactTokenCount(totals.input),
+                tint: TerminalColors.blue
+            )
+            AgentUsageTokenPill(
+                title: "输出 Token",
+                value: AgentUsageFormat.compactTokenCount(totals.output),
+                tint: TerminalColors.amber
+            )
+        }
+        .padding(.vertical, 12)
+    }
+}
+
+private struct AgentUsageTokenPill: View {
+    let title: String
+    let value: String
+    let tint: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(appLocalized: title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(.white.opacity(0.50))
+            Text(verbatim: value)
+                .font(.system(size: 16, weight: .bold, design: .rounded))
+                .foregroundColor(tint.opacity(0.95))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.62)
+                .help(value)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct AgentUsageRankingList: View {
+    let items: [AgentUsageRankItem]
+    let emptyTitle: String
+    let tint: Color
+
+    var body: some View {
+        if items.isEmpty {
+            AgentUsageEmptyLine(title: emptyTitle)
+                .padding(.vertical, 16)
+        } else {
+            VStack(spacing: 0) {
+                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                    AgentUsageRankingRow(index: index, item: item, tint: tint)
+                    if index < items.count - 1 {
+                        AgentUsageInsetDivider()
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct AgentUsageRankingRow: View {
+    let index: Int
+    let item: AgentUsageRankItem
+    let tint: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Text(verbatim: "#\(index + 1)")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .foregroundColor(tint.opacity(0.86))
+                    .frame(width: 30, alignment: .leading)
+
+                Text(verbatim: item.name)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.88))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .layoutPriority(1)
+                    .help(item.name)
+
+                Spacer(minLength: 8)
+
+                Text(verbatim: AgentUsageFormat.integer(item.count))
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .foregroundColor(.white.opacity(0.72))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.62)
+                    .frame(minWidth: 46, idealWidth: 64, alignment: .trailing)
+                    .help(AgentUsageFormat.integer(item.count))
+            }
+
+            GeometryReader { proxy in
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .fill(Color.white.opacity(0.07))
+                    .overlay(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 3, style: .continuous)
+                            .fill(tint.opacity(0.72))
+                            .frame(width: max(6, proxy.size.width * max(0.04, item.share)))
+                    }
+            }
+            .frame(height: 6)
+        }
+        .padding(.vertical, 10)
+    }
+}
+
+private struct AgentUsageHeatmapView: View {
+    let days: [AgentUsageHeatmapDay]
+
+    private let labelColumnWidth: CGFloat = 22
+    private let labelGridSpacing: CGFloat = 10
+    private let monthLabelHeight: CGFloat = 13
+    private let headerHeight: CGFloat = 30
+    private let legendHeight: CGFloat = 14
+    private let calendarHeight: CGFloat = 178
+    private let calendar = Calendar.current
+
+    var body: some View {
+        GeometryReader { proxy in
+            let weekList = weeks
+            let layout = makeLayout(availableWidth: proxy.size.width, weekCount: weekList.count)
+
+            VStack(alignment: .leading, spacing: 10) {
+                heatmapHeader(layout: layout)
+                .frame(height: headerHeight)
+
+                HStack(alignment: .top, spacing: labelGridSpacing) {
+                    weekdayLabels(layout: layout)
+                    VStack(alignment: .leading, spacing: 6) {
+                        heatmapGrid(weeks: weekList, layout: layout)
+                        monthLabels(weeks: weekList, layout: layout)
+                    }
+                    .frame(width: layout.gridWidth, alignment: .leading)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(height: calendarHeight)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, 2)
+    }
+
+    private func heatmapHeader(layout: HeatmapLayout) -> some View {
+        HStack(alignment: .lastTextBaseline, spacing: 8) {
+            Text(appLocalized: "最近 6 个月")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(.white.opacity(0.70))
+
+            Text(appLocalized: "每日活跃记录")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(.white.opacity(0.42))
+
+            if days.allSatisfy({ $0.activityCount == 0 }) {
+                Text(appLocalized: "还没有活跃记录")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.white.opacity(0.40))
+            }
+
+            Spacer(minLength: 0)
+
+            heatmapLegend(layout: layout)
+        }
+    }
+
+    private func weekdayLabels(layout: HeatmapLayout) -> some View {
+        VStack(alignment: .trailing, spacing: layout.rowSpacing) {
+            ForEach(0..<7, id: \.self) { weekday in
+                Text(appLocalized: weekdayLabel(for: weekday))
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(.white.opacity(weekdayLabel(for: weekday).isEmpty ? 0 : 0.46))
+                    .frame(width: labelColumnWidth, height: layout.cellSize, alignment: .trailing)
+            }
+        }
+    }
+
+    private func monthLabels(weeks: [HeatmapWeek], layout: HeatmapLayout) -> some View {
+        ZStack(alignment: .topLeading) {
+            ForEach(monthMarkers(for: weeks, layout: layout)) { marker in
+                Text(verbatim: marker.label)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.62))
+                    .frame(width: marker.width, alignment: .leading)
+                    .offset(x: marker.x)
+            }
+        }
+        .frame(width: layout.gridWidth, height: monthLabelHeight, alignment: .topLeading)
+        .clipped()
+    }
+
+    private func heatmapGrid(weeks: [HeatmapWeek], layout: HeatmapLayout) -> some View {
+        HStack(alignment: .top, spacing: layout.columnSpacing) {
+            ForEach(Array(weeks.enumerated()), id: \.offset) { _, week in
+                VStack(spacing: layout.rowSpacing) {
+                    ForEach(0..<7, id: \.self) { weekday in
+                        if let day = week.days[weekday] {
+                            RoundedRectangle(cornerRadius: layout.cornerRadius, style: .continuous)
+                                .fill(heatmapGradient(for: day.activityCount))
+                                .overlay(alignment: .top) {
+                                    RoundedRectangle(cornerRadius: layout.cornerRadius, style: .continuous)
+                                        .fill(Color.white.opacity(day.activityCount > 0 ? 0.13 : 0.04))
+                                        .frame(height: max(1, layout.cellSize * 0.24))
+                                }
+                                .frame(width: layout.cellSize, height: layout.cellSize)
+                                .help(AppLocalization.format(
+                                    "%@ · %@ 条活跃记录",
+                                    AgentUsageFormat.shortDate(day.date),
+                                    AgentUsageFormat.integer(day.activityCount)
+                                ))
+                        } else {
+                            RoundedRectangle(cornerRadius: layout.cornerRadius, style: .continuous)
+                                .fill(Color.clear)
+                                .frame(width: layout.cellSize, height: layout.cellSize)
+                        }
+                    }
+                }
+            }
+        }
+        .frame(width: layout.gridWidth, alignment: .leading)
+    }
+
+    private func heatmapLegend(layout: HeatmapLayout) -> some View {
+        HStack(spacing: 5) {
+            Text(appLocalized: "低")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundColor(.white.opacity(0.42))
+            ForEach(0..<5, id: \.self) { level in
+                RoundedRectangle(cornerRadius: layout.cornerRadius, style: .continuous)
+                    .fill(heatmapGradient(forLevel: level))
+                    .overlay(alignment: .top) {
+                        RoundedRectangle(cornerRadius: layout.cornerRadius, style: .continuous)
+                            .fill(Color.white.opacity(level > 0 ? 0.13 : 0.04))
+                            .frame(height: max(1, layout.cellSize * 0.24))
+                    }
+                    .frame(width: layout.cellSize, height: layout.cellSize)
+            }
+            Text(appLocalized: "高")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundColor(.white.opacity(0.42))
+        }
+        .frame(height: legendHeight)
+    }
+
+    private func heatmapGradient(for count: Int) -> LinearGradient {
+        if count <= 0 { return heatmapGradient(forLevel: 0) }
+        if count < 3 { return heatmapGradient(forLevel: 1) }
+        if count < 8 { return heatmapGradient(forLevel: 2) }
+        if count < 16 { return heatmapGradient(forLevel: 3) }
+        return heatmapGradient(forLevel: 4)
+    }
+
+    private func heatmapGradient(forLevel level: Int) -> LinearGradient {
+        let base = color(forLevel: level)
+        return LinearGradient(
+            colors: [
+                Color.white.opacity(level > 0 ? 0.18 : 0.05),
+                base.opacity(level > 0 ? 0.95 : 0.78),
+                base
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
+
+    private func color(for count: Int) -> Color {
+        if count <= 0 { return color(forLevel: 0) }
+        if count < 3 { return color(forLevel: 1) }
+        if count < 8 { return color(forLevel: 2) }
+        if count < 16 { return color(forLevel: 3) }
+        return color(forLevel: 4)
+    }
+
+    private func color(forLevel level: Int) -> Color {
+        switch level {
+        case 0: return Color.white.opacity(0.08)
+        case 1: return TerminalColors.cyan.opacity(0.34)
+        case 2: return TerminalColors.cyan.opacity(0.58)
+        case 3: return TerminalColors.blue.opacity(0.72)
+        default: return TerminalColors.blue.opacity(0.95)
+        }
+    }
+
+    private var weeks: [HeatmapWeek] {
+        guard let firstDay = days.first else { return [] }
+
+        var result: [HeatmapWeek] = []
+        var currentWeek = HeatmapWeek(startDate: weekStart(for: firstDay.date), days: Array(repeating: nil, count: 7))
+
+        for day in days {
+            let dayWeekStart = weekStart(for: day.date)
+            if !calendar.isDate(dayWeekStart, inSameDayAs: currentWeek.startDate) {
+                result.append(currentWeek)
+                currentWeek = HeatmapWeek(startDate: dayWeekStart, days: Array(repeating: nil, count: 7))
+            }
+
+            currentWeek.days[weekdayIndex(for: day.date)] = day
+        }
+
+        result.append(currentWeek)
+        return result
+    }
+
+    private func weekdayIndex(for date: Date) -> Int {
+        let weekday = calendar.component(.weekday, from: date)
+        return (weekday + 5) % 7
+    }
+
+    private func weekStart(for date: Date) -> Date {
+        let startOfDay = calendar.startOfDay(for: date)
+        let daysFromMonday = weekdayIndex(for: startOfDay)
+        return calendar.date(byAdding: .day, value: -daysFromMonday, to: startOfDay) ?? startOfDay
+    }
+
+    private func weekdayLabel(for index: Int) -> String {
+        switch index {
+        case 0: return "一"
+        case 2: return "三"
+        case 4: return "五"
+        default: return ""
+        }
+    }
+
+    private func monthLabel(for week: HeatmapWeek, at index: Int) -> String {
+        guard let visibleDay = week.days.compactMap({ $0 }).first else { return "" }
+        if index == 0 || calendar.component(.day, from: visibleDay.date) <= 7 {
+            return AgentUsageFormat.shortMonth(visibleDay.date)
+        }
+        return ""
+    }
+
+    private func monthMarkers(for weeks: [HeatmapWeek], layout: HeatmapLayout) -> [MonthMarker] {
+        Array(weeks.enumerated()).compactMap { index, week in
+            let label = monthLabel(for: week, at: index)
+            guard !label.isEmpty else { return nil }
+
+            let preferredWidth: CGFloat = 26
+            let x = min(layout.xOffset(forWeekAt: index), max(0, layout.gridWidth - preferredWidth))
+            return MonthMarker(id: index, label: label, x: x, width: preferredWidth)
+        }
+    }
+
+    private func makeLayout(availableWidth: CGFloat, weekCount: Int) -> HeatmapLayout {
+        let resolvedWeekCount = max(1, weekCount)
+        let availableGridWidth = max(160, availableWidth - labelColumnWidth - labelGridSpacing)
+        let preferredCellSize: CGFloat
+        if availableGridWidth >= 640 {
+            preferredCellSize = 16
+        } else if availableGridWidth >= 430 {
+            preferredCellSize = 14
+        } else {
+            preferredCellSize = 11
+        }
+        let minimumColumnSpacing: CGFloat = availableGridWidth < 430 ? 2 : 4
+        let cellSize = min(
+            preferredCellSize,
+            max(6, (availableGridWidth - CGFloat(resolvedWeekCount - 1) * minimumColumnSpacing) / CGFloat(resolvedWeekCount))
+        )
+        let columnSpacing = resolvedWeekCount > 1
+            ? max(
+                minimumColumnSpacing,
+                (availableGridWidth - CGFloat(resolvedWeekCount) * cellSize) / CGFloat(resolvedWeekCount - 1)
+            )
+            : 0
+        let rowSpacing = min(6, max(3, cellSize * 0.30))
+        let gridWidth = CGFloat(resolvedWeekCount) * cellSize + CGFloat(resolvedWeekCount - 1) * columnSpacing
+
+        return HeatmapLayout(
+            cellSize: cellSize,
+            columnSpacing: columnSpacing,
+            rowSpacing: rowSpacing,
+            gridWidth: gridWidth,
+            cornerRadius: min(3.5, cellSize * 0.32)
+        )
+    }
+
+    private struct HeatmapLayout {
+        let cellSize: CGFloat
+        let columnSpacing: CGFloat
+        let rowSpacing: CGFloat
+        let gridWidth: CGFloat
+        let cornerRadius: CGFloat
+
+        func xOffset(forWeekAt index: Int) -> CGFloat {
+            CGFloat(index) * (cellSize + columnSpacing)
+        }
+    }
+
+    private struct MonthMarker: Identifiable {
+        let id: Int
+        let label: String
+        let x: CGFloat
+        let width: CGFloat
+    }
+
+    private struct HeatmapWeek {
+        let startDate: Date
+        var days: [AgentUsageHeatmapDay?]
+    }
+}
+
+private struct AgentUsageInsetDivider: View {
+    var body: some View {
+        Divider()
+            .overlay(Color.white.opacity(0.10))
+    }
+}
+
+private struct AgentUsageEmptyLine: View {
+    let title: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "chart.xyaxis.line")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(.white.opacity(0.34))
+            Text(appLocalized: title)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(.white.opacity(0.46))
+            Spacer(minLength: 0)
+        }
+    }
+}
+
+private enum AgentUsageFormat {
+    private static let integerFormatter: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        return formatter
+    }()
+
+    private static let usdFormatter: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .currency
+        formatter.currencyCode = "USD"
+        formatter.currencySymbol = "$"
+        formatter.minimumFractionDigits = 2
+        formatter.maximumFractionDigits = 2
+        return formatter
+    }()
+
+    private static let shortDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "M/d"
+        return formatter
+    }()
+
+    private static let shortMonthFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMM"
+        return formatter
+    }()
+
+    static func integer(_ value: Int) -> String {
+        integerFormatter.string(from: NSNumber(value: value)) ?? "\(value)"
+    }
+
+    static func compactCount(_ value: Int) -> String {
+        compactMetric(Double(value), suffixes: [(1_000_000_000_000, "T"), (1_000_000_000, "B"), (1_000_000, "M"), (1_000, "K")]) {
+            integer(value)
+        }
+    }
+
+    static func compactTokenCount(_ value: Int) -> String {
+        compactCount(value)
+    }
+
+    static func usd(_ value: Double) -> String {
+        if value > 0, value < 0.01 {
+            return String(format: "$%.4f", value)
+        }
+        return usdFormatter.string(from: NSNumber(value: value)) ?? String(format: "$%.2f", value)
+    }
+
+    static func compactUSD(_ value: Double) -> String {
+        guard value >= 10_000 else {
+            return usd(value)
+        }
+
+        let compactValue = compactMetric(value, suffixes: [(1_000_000_000, "B"), (1_000_000, "M"), (1_000, "K")]) {
+            String(format: "%.0f", value)
+        }
+        return "$\(compactValue)"
+    }
+
+    static func shortDate(_ date: Date) -> String {
+        shortDateFormatter.string(from: date)
+    }
+
+    static func shortMonth(_ date: Date) -> String {
+        shortMonthFormatter.string(from: date)
+    }
+
+    private static func compactMetric(
+        _ value: Double,
+        suffixes: [(threshold: Double, suffix: String)],
+        fallback: () -> String
+    ) -> String {
+        guard let scale = suffixes.first(where: { value >= $0.threshold }) else {
+            return fallback()
+        }
+
+        let scaledValue = value / scale.threshold
+        let formatted = scaledValue >= 100
+            ? String(format: "%.0f", scaledValue)
+            : String(format: "%.1f", scaledValue)
+        return "\(formatted)\(scale.suffix)"
+    }
+}
+
 private struct SettingsCategoryLoadingView: View {
     let category: SettingsCategory
 
@@ -886,7 +2186,7 @@ private struct SettingsCategoryLoadingView: View {
             return AppLocalization.string("正在扫描可用声音主题包")
         case .integration:
             return AppLocalization.string("正在检查 Hooks、IDE 扩展与客户端安装状态")
-        case .general, .shortcuts, .mascot, .remote, .labs, .about:
+        case .general, .shortcuts, .mascot, .analytics, .remote, .labs, .about:
             return AppLocalization.string("马上就好")
         }
     }
@@ -916,6 +2216,22 @@ private struct SettingsGlassSurface: NSViewRepresentable {
         nsView.material = material
         nsView.blendingMode = blendingMode
         nsView.state = state
+    }
+}
+
+private struct SettingsWindowDragHandle: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        DragHandleView()
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    private final class DragHandleView: NSView {
+        override var mouseDownCanMoveWindow: Bool { false }
+
+        override func mouseDown(with event: NSEvent) {
+            window?.performDrag(with: event)
+        }
     }
 }
 
@@ -981,7 +2297,6 @@ private struct SettingsPanelContentView: View {
         .background(panelBackgroundColor)
         .ignoresSafeArea()
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .shadow(color: Color.black.opacity(0.22), radius: 30, y: 18)
         .preferredColorScheme(.dark)
         .environment(\.mascotAnimationsEnabled, arePreviewAnimationsActive)
         .onAppear {
@@ -1330,7 +2645,9 @@ private struct SettingsPanelContentView: View {
                 }
             }
 
-            Spacer(minLength: 0)
+            SettingsWindowDragHandle()
+                .frame(maxWidth: .infinity, minHeight: 22, maxHeight: 22)
+                .accessibilityHidden(true)
         }
         .padding(.horizontal, 8)
         .padding(.bottom, 2)
@@ -1354,6 +2671,8 @@ private struct SettingsPanelContentView: View {
                         mascotContent
                     case .sound:
                         soundContent
+                    case .analytics:
+                        analyticsContent
                     case .integration:
                         integrationContent
                     case .remote:
@@ -1474,7 +2793,7 @@ private struct SettingsPanelContentView: View {
         switch category {
         case .display, .sound, .integration:
             return true
-        case .general, .shortcuts, .mascot, .remote, .labs, .about:
+        case .general, .shortcuts, .mascot, .analytics, .remote, .labs, .about:
             return false
         }
     }
@@ -1635,6 +2954,15 @@ private struct SettingsPanelContentView: View {
                     SettingsLineDivider()
                     NotchDisplayModeSelector(mode: $settings.notchDisplayMode)
                     SettingsLineDivider()
+                    SettingsSliderLine(
+                        title: "静默状态宽度",
+                        subtitle: "调整无展开面板时的刘海宽度；较窄时会降级为单图标显示，不影响点击或 hover 后的展开面板宽度。",
+                        value: $settings.notchModuleWidth,
+                        range: AppSettings.notchModuleWidthRange,
+                        step: 4,
+                        format: { "\($0.formatted(.number.precision(.fractionLength(0)))) pt" }
+                    )
+                    SettingsLineDivider()
                     SettingsInfoLine(
                         title: "右侧展示内容",
                         subtitle: "默认显示会话数量；检测到 Claude Code 或 Codex 的 7d 用量后，可改为展示其中一个客户端的 Token 剩余额度。"
@@ -1719,8 +3047,25 @@ private struct SettingsPanelContentView: View {
                     step: 10,
                     format: { "\($0.formatted(.number.precision(.fractionLength(0)))) pt" }
                 )
+                SettingsLineDivider()
+
+                SettingsInfoLine(
+                    title: "设置面板大小",
+                    subtitle: "将设置面板恢复到默认宽高，适合窗口被拉大或缩小时快速回到推荐布局。"
+                ) {
+                    HookManagementButton(
+                        title: "重置",
+                        tint: SettingsCategory.display.tint,
+                        action: resetSettingsPanelSize
+                    )
+                }
             }
         }
+    }
+
+    private func resetSettingsPanelSize() {
+        guard presentation == .window else { return }
+        SettingsWindowLayout.resetContentSize(of: currentWindow)
     }
 
     private func replayNotchDetachmentHint() {
@@ -1799,6 +3144,10 @@ private struct SettingsPanelContentView: View {
 
     private var soundContent: some View {
         SoundSettingsContent()
+    }
+
+    private var analyticsContent: some View {
+        AgentUsageAnalyticsContent()
     }
 
     private var integrationContent: some View {
@@ -2082,6 +3431,21 @@ private struct SettingsPanelContentView: View {
                     updateAccessory
                 }
 
+                if updateManager.canInstallPendingUpdateNow {
+                    SettingsLineDivider()
+
+                    SettingsActionLine(
+                        title: "立即重启安装",
+                        subtitle: "不等待空闲，立即退出 Ping Island 并完成已下载的更新"
+                    ) {
+                        updateManager.installAndRelaunch()
+                    } accessory: {
+                        Image(systemName: "arrow.clockwise.circle.fill")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundColor(TerminalColors.green)
+                    }
+                }
+
                 if updateManager.canShowReleaseNotes {
                     SettingsLineDivider()
 
@@ -2319,8 +3683,12 @@ private struct SettingsPanelContentView: View {
             return AppLocalization.string("检查更新")
         case .checking:
             return AppLocalization.string("检查中...")
-        case .found, .downloading, .extracting, .readyToInstall, .installing:
+        case .found, .downloading, .extracting:
             return AppLocalization.string("静默更新中")
+        case .readyToInstall:
+            return AppLocalization.string("等待重启安装")
+        case .installing:
+            return AppLocalization.string("正在安装更新")
         case .error:
             return AppLocalization.string("重试更新")
         }
@@ -2347,7 +3715,7 @@ private struct SettingsPanelContentView: View {
         case .extracting:
             return AppLocalization.string("正在准备安装更新")
         case .readyToInstall(let version):
-            return AppLocalization.format("v%@ 已就绪，空闲时自动重启安装", version)
+            return AppLocalization.format("v%@ 已就绪，可立即重启安装，或等空闲时自动安装", version)
         case .installing:
             return AppLocalization.string("正在静默安装并重启")
         case .error:
@@ -2510,14 +3878,39 @@ private struct WindowControlButton: View {
 
 private struct SettingsSectionCard<Content: View>: View {
     let title: String
-    @ViewBuilder let content: Content
+    private let titleAccessory: AnyView?
+    private let content: Content
+
+    init(title: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.titleAccessory = nil
+        self.content = content()
+    }
+
+    init<Accessory: View>(
+        title: String,
+        @ViewBuilder titleAccessory: () -> Accessory,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.title = title
+        self.titleAccessory = AnyView(titleAccessory())
+        self.content = content()
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(appLocalized: title)
-                .font(.system(size: 15, weight: .bold))
-                .foregroundColor(.white)
-                .padding(.bottom, 10)
+            HStack(alignment: .center, spacing: 12) {
+                Text(appLocalized: title)
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundColor(.white)
+
+                Spacer(minLength: 12)
+
+                if let titleAccessory {
+                    titleAccessory
+                }
+            }
+            .padding(.bottom, 10)
 
             VStack(spacing: 0) {
                 content
@@ -4209,9 +5602,28 @@ private struct SettingsActionLine<Accessory: View>: View {
 
     var body: some View {
         Button(action: action) {
-            SettingsInfoLine(title: title, subtitle: subtitle) {
+            HStack(alignment: .center, spacing: 16) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(appLocalized: title)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.white)
+
+                    if let subtitle {
+                        Text(appLocalized: subtitle)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(.white.opacity(0.58))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .layoutPriority(1)
+
                 accessory
+                    .frame(minWidth: 36, minHeight: 36, alignment: .center)
             }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 14)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -4316,6 +5728,7 @@ private struct SettingsSliderLine: View {
     let range: ClosedRange<Double>
     let step: Double
     let format: (Double) -> String
+    var showsTickMarks = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -4340,6 +5753,24 @@ private struct SettingsSliderLine: View {
 
             Slider(value: $value, in: range, step: step)
                 .tint(TerminalColors.blue)
+
+            if showsTickMarks {
+                HStack(spacing: 0) {
+                    ForEach(0..<17, id: \.self) { _ in
+                        Capsule()
+                            .fill(Color.white.opacity(0.28))
+                            .frame(width: 1, height: 6)
+
+                        Spacer(minLength: 0)
+                    }
+
+                    Capsule()
+                        .fill(Color.white.opacity(0.28))
+                        .frame(width: 1, height: 6)
+                }
+                .padding(.horizontal, 6)
+                .padding(.top, -7)
+            }
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 14)
@@ -5195,6 +6626,132 @@ private struct SettingsStatusLine: View {
     }
 }
 
+private struct SoundEventSection<Content: View>: View {
+    let title: String
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        SettingsSectionCard(title: title) {
+            VStack(spacing: 0) {
+                content
+            }
+        }
+    }
+}
+
+private struct SoundStartupLine: View {
+    let preview: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 20) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color(red: 0.96, green: 0.63, blue: 0.22),
+                                Color(red: 0.62, green: 0.35, blue: 0.12)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+
+                Image(systemName: "music.note")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.92))
+            }
+            .frame(width: 52, height: 52)
+            .shadow(color: Color(red: 0.96, green: 0.48, blue: 0.12).opacity(0.24), radius: 14, y: 7)
+
+            SoundEventTextBlock(
+                title: "固定启动音",
+                subtitle: "使用内置 8-bit 启动旋律。应用启动时会自动播放，也可以在这里试听。"
+            )
+
+            Spacer(minLength: 14)
+
+            SoundPreviewButton(isEnabled: true, action: preview)
+        }
+        .padding(.horizontal, 26)
+        .padding(.vertical, 16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct SoundEventTextBlock: View {
+    let title: String
+    let subtitle: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(appLocalized: title)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundColor(.white.opacity(0.94))
+                .lineLimit(1)
+                .minimumScaleFactor(0.88)
+
+            Text(appLocalized: subtitle)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(.white.opacity(0.58))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .layoutPriority(1)
+    }
+}
+
+private struct SoundPreviewButton: View {
+    let isEnabled: Bool
+    var size: CGFloat = 28
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "play.fill")
+                .font(.system(size: size * 0.30, weight: .bold))
+                .foregroundColor(.white.opacity(isEnabled ? 0.86 : 0.32))
+                .offset(x: 1)
+                .frame(width: size, height: size)
+                .background(
+                    Circle()
+                        .fill(Color.white.opacity(isEnabled ? 0.075 : 0.025))
+                        .overlay(
+                            Circle()
+                                .strokeBorder(Color.white.opacity(isEnabled ? 0.13 : 0.05), lineWidth: 1)
+                        )
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .help("试听")
+    }
+}
+
+private struct SoundControlCluster<PickerContent: View>: View {
+    @Binding var isEnabled: Bool
+    let pickerWidth: CGFloat
+    let preview: () -> Void
+    @ViewBuilder let picker: PickerContent
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 8) {
+            picker
+                .settingsMenuPicker(width: pickerWidth)
+                .disabled(!isEnabled)
+                .frame(width: pickerWidth, alignment: .trailing)
+
+            SoundPreviewButton(isEnabled: isEnabled, action: preview)
+
+            Toggle("", isOn: $isEnabled)
+                .labelsHidden()
+                .settingsCompactSwitch(scale: 0.88)
+                .frame(width: 36, alignment: .center)
+        }
+        .frame(width: pickerWidth + 80, alignment: .trailing)
+    }
+}
+
 private struct SoundEventSettingsLine: View {
     let event: NotificationEvent
     @Binding var isEnabled: Bool
@@ -5202,55 +6759,23 @@ private struct SoundEventSettingsLine: View {
     let preview: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .center, spacing: 16) {
-                Text(appLocalized: event.title)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundColor(.white)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .layoutPriority(1)
+        HStack(alignment: .center, spacing: 18) {
+            SoundEventTextBlock(title: event.title, subtitle: event.subtitle)
 
-                Spacer(minLength: 12)
+            Spacer(minLength: 24)
 
-                HStack(alignment: .center, spacing: 8) {
-                    Toggle("", isOn: $isEnabled)
-                        .labelsHidden()
-                        .settingsCompactSwitch()
-
-                    Picker(event.title, selection: $selectedSound) {
-                        ForEach(NotificationSound.allCases, id: \.self) { sound in
-                            Text(sound.rawValue).tag(sound)
-                        }
+            SoundControlCluster(isEnabled: $isEnabled, pickerWidth: 190, preview: preview) {
+                Picker(event.title, selection: $selectedSound) {
+                    ForEach(NotificationSound.allCases, id: \.self) { sound in
+                        Text(sound.rawValue).tag(sound)
                     }
-                    .id(selectedSound)
-                    .labelsHidden()
-                    .settingsMenuPicker(width: 148)
-                    .disabled(!isEnabled)
-
-                    Button(action: preview) {
-                        Image(systemName: "play.fill")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundColor(.white.opacity(isEnabled ? 0.82 : 0.4))
-                            .frame(width: 26, height: 26)
-                            .background(
-                                Circle()
-                                    .fill(Color.white.opacity(isEnabled ? 0.08 : 0.03))
-                            )
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!isEnabled)
                 }
+                .id(selectedSound)
+                .labelsHidden()
             }
-
-            Text(appLocalized: event.subtitle)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundColor(.white.opacity(0.58))
-                .fixedSize(horizontal: false, vertical: true)
-                .layoutPriority(1)
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 16)
+        .padding(.horizontal, 26)
+        .padding(.vertical, 18)
     }
 }
 
@@ -5264,49 +6789,32 @@ private struct SoundPackEventLine: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .center, spacing: 16) {
-                Text(appLocalized: event.title)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundColor(.white)
+        HStack(alignment: .center, spacing: 18) {
+            VStack(alignment: .leading, spacing: 5) {
+                SoundEventTextBlock(title: event.title, subtitle: event.subtitle)
+
+                Text(categorySummary)
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.38))
                     .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .layoutPriority(1)
-
-                Spacer(minLength: 12)
-
-                HStack(spacing: 8) {
-                    Toggle("", isOn: $isEnabled)
-                        .labelsHidden()
-                        .settingsCompactSwitch()
-
-                    Button(action: preview) {
-                        Image(systemName: "play.fill")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundColor(.white.opacity(isEnabled ? 0.82 : 0.4))
-                            .frame(width: 26, height: 26)
-                            .background(
-                                Circle()
-                                    .fill(Color.white.opacity(isEnabled ? 0.08 : 0.03))
-                            )
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!isEnabled)
-                }
+                    .truncationMode(.middle)
             }
+            .layoutPriority(1)
 
-            Text(appLocalized: event.subtitle)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundColor(.white.opacity(0.58))
-                .fixedSize(horizontal: false, vertical: true)
-                .layoutPriority(1)
+            Spacer(minLength: 24)
 
-            Text(categorySummary)
-                .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                .foregroundColor(.white.opacity(0.42))
+            HStack(spacing: 8) {
+                SoundPreviewButton(isEnabled: isEnabled, action: preview)
+
+                Toggle("", isOn: $isEnabled)
+                    .labelsHidden()
+                    .settingsCompactSwitch(scale: 0.88)
+                    .frame(width: 36, alignment: .center)
+            }
+            .frame(width: 72, alignment: .trailing)
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 16)
+        .padding(.horizontal, 26)
+        .padding(.vertical, 18)
     }
 }
 
@@ -5317,54 +6825,22 @@ private struct BundledSoundEventLine: View {
     let preview: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .center, spacing: 16) {
-                Text(appLocalized: event.title)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundColor(.white)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .layoutPriority(1)
+        HStack(alignment: .center, spacing: 18) {
+            SoundEventTextBlock(title: event.title, subtitle: event.subtitle)
 
-                Spacer(minLength: 12)
+            Spacer(minLength: 24)
 
-                HStack(alignment: .center, spacing: 8) {
-                    Toggle("", isOn: $isEnabled)
-                        .labelsHidden()
-                        .settingsCompactSwitch()
-
-                    Picker(event.title, selection: $selectedSound) {
-                        ForEach(Island8BitSound.allOrdered) { sound in
-                            Text(sound.label).tag(sound)
-                        }
+            SoundControlCluster(isEnabled: $isEnabled, pickerWidth: 190, preview: preview) {
+                Picker(event.title, selection: $selectedSound) {
+                    ForEach(Island8BitSound.allOrdered) { sound in
+                        Text(sound.label).tag(sound)
                     }
-                    .id(selectedSound)
-                    .labelsHidden()
-                    .settingsMenuPicker(width: 148)
-                    .disabled(!isEnabled)
-
-                    Button(action: preview) {
-                        Image(systemName: "play.fill")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundColor(.white.opacity(isEnabled ? 0.82 : 0.4))
-                            .frame(width: 26, height: 26)
-                            .background(
-                                Circle()
-                                    .fill(Color.white.opacity(isEnabled ? 0.08 : 0.03))
-                            )
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!isEnabled)
                 }
+                .id(selectedSound)
+                .labelsHidden()
             }
-
-            Text(appLocalized: event.subtitle)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundColor(.white.opacity(0.58))
-                .fixedSize(horizontal: false, vertical: true)
-                .layoutPriority(1)
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 16)
+        .padding(.horizontal, 26)
+        .padding(.vertical, 18)
     }
 }

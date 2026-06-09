@@ -41,6 +41,7 @@ This file is a routing layer for coding agents working in this repo. Keep it sho
   - Terminal focus flows currently cover iTerm2, Ghostty, Terminal.app, tmux, and IDE-hosted terminals
 - Remote SSH forwarding and remote-host management: `PingIsland/Services/Remote/`
   - Remote hosts can bootstrap a bridge on the SSH target, rewrite remote hooks, install managed plugin-directory integrations such as Hermes under the remote home directory, and attach a bidirectional forwarding channel back into PingIsland
+  - The remote bridge forwards recent Codex app-server thread activity from the SSH target's `~/.codex/state_*.sqlite` through the existing remote hook-event channel
 - Provider/client routing: bridge envelopes are normalized in `PingIsland/Services/Hooks/HookSocketServer.swift`, stored on `SessionState`, and launched via `PingIsland/Services/Window/SessionLauncher.swift`
 - Client profile registry: installable hook clients and runtime client branding / recognition are centralized in `PingIsland/Models/ClientProfile.swift`
 - VS Code-compatible IDE focus extension install / URI launch: `PingIsland/Services/Window/IDEExtensionInstaller.swift`, `PingIsland/Services/Window/TerminalSessionFocuser.swift`
@@ -88,6 +89,7 @@ This file is a routing layer for coding agents working in this repo. Keep it sho
   - CodeBuddy-family hook installs currently cover CodeBuddy IDE and CodeBuddy CLI as separate profiles that share `~/.codebuddy/settings.json`, plus WorkBuddy under `~/.workbuddy/settings.json`. Keep CodeBuddy IDE and CodeBuddy CLI hook semantics independent even though they share a file; CodeBuddy CLI uses its Claude-compatible hook response shape and must preserve CodeBuddy IDE hooks plus unrelated JSON settings.
   - OpenCode is managed as a generated plugin file under `~/.config/opencode/plugins/ping-island.js`; treat it as a plugin-based integration, not a JSON hooks file.
   - Kimi CLI hooks are managed through `~/.kimi/config.toml`; use `[[hooks]]` array-of-tables syntax. The installer preserves all non-Island TOML content (providers, models, loop_control, etc.) and only manipulates the `[[hooks]]` sections. Event names follow the Claude Code convention (`SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest`, `Notification`, `Stop`).
+  - Pi Agent is managed as a generated TypeScript extension under `~/.pi/agent/extensions/ping_island/index.ts`; treat it as an official Pi extension integration that forwards events through the Claude-compatible bridge with `client-kind=pi`, not as JSON/RPC polling or process scanning. Pi has a dedicated `MascotKind.pi`, so trace mascot changes through `ClientProfile`, `SessionProvider`, `MascotView`, and mascot settings together.
   - `QoderWork` should not be added to `ideExtensionProfiles` unless it actually ships VS Code-compatible extension support in the future.
 - If you change how sessions are associated across relaunches or between hook/app-server ingress paths, inspect both `SessionStore` and `SessionAssociationStore` so cached client metadata stays compatible.
 - If you change the new native runtime rollout path, keep it isolated from the legacy hook/app-server flow. Reuse shared `SessionState`-driven views, but keep runtime orchestration, persistence, and feature gating under `PingIsland/Services/Runtime/` and `PingIsland/Core/FeatureFlags.swift`.
@@ -105,6 +107,7 @@ This file is a routing layer for coding agents working in this repo. Keep it sho
 - If you change tmux or terminal focusing, trace through `Services/Tmux`, `Services/Window`, and `TerminalVisibilityDetector`.
 - If you change IDE terminal jump behavior, inspect both `TerminalSessionFocuser` and `IDEExtensionInstaller`, plus the integration settings UI so install state and URI schemes stay aligned.
 - If you change Codex behavior, verify both the monitor layer under `PingIsland/Services/Codex/` and the UI under `PingIsland/UI/Views/CodexSessionView.swift`.
+  - Long Codex/subagent prompts, results, tool details, and transcript rows must keep full data in `SessionStore` / snapshots and apply bounded display text only at SwiftUI rendering boundaries. Prefer `SessionTextSanitizer.boundedDisplayText` for inline `Text` / Markdown content, add or preserve tests for truncation behavior, and avoid passing unbounded transcripts directly into expanded Island detail views.
 - If you change app updates or release notes, trace through `PingIsland/Services/Update/`, `PingIsland/Info.plist`, the settings UI, and `scripts/create-release.sh` so appcast assets, runtime config, and update messaging stay aligned.
 - If you change Sparkle configuration keys or hosting assumptions, update `Config/App.xcconfig`, `Config/LocalSecrets.example.xcconfig`, `scripts/generate-keys.sh`, and `docs/sparkle-release.md` together.
 - If you change App Store distribution behavior, keep the `PingIslandAppStore` target isolated from the regular `PingIsland` Developer ID/Sparkle lane, and update `docs/mac-app-store-submission.md` plus `scripts/build-app-store.sh` together.
@@ -156,6 +159,7 @@ This file is a routing layer for coding agents working in this repo. Keep it sho
   - SwiftUI view-local `@State`
   - shared `ObservableObject` state
   - actor-owned `SessionStore` state
+- Keep localization lookups at UI or other actor-appropriate boundaries. `AppLocalization.string` is main-actor isolated on CI toolchains, so nonisolated utilities such as sanitizers, parsers, stores, and model helpers should expose localization keys or plain data instead of calling localization APIs directly.
 - When adding bundled assets or fonts, make sure app startup initializes them.
 - Keep this file high-signal. If a section becomes long, move the durable detail into a dedicated markdown doc and link it here.
 

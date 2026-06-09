@@ -1,10 +1,31 @@
 import AppKit
+import Carbon.HIToolbox
 import QuartzCore
 import SwiftUI
 
 extension Notification.Name {
     static let settingsWindowVisibilityDidChange = Notification.Name("settingsWindowVisibilityDidChange")
     static let settingsWindowCategorySelectionRequested = Notification.Name("settingsWindowCategorySelectionRequested")
+}
+
+enum SettingsWindowLayout {
+    @MainActor
+    static func resetContentSize(of window: NSWindow?) {
+        guard let window else { return }
+
+        window.minSize = NSSize(
+            width: AppSettings.minimumSettingsWindowSize.width,
+            height: AppSettings.minimumSettingsWindowSize.height
+        )
+        window.maxSize = NSSize(
+            width: AppSettings.maximumSettingsWindowSize.width,
+            height: AppSettings.maximumSettingsWindowSize.height
+        )
+        window.setContentSize(NSSize(
+            width: SettingsWindowDefaults.defaultContentSize.width,
+            height: SettingsWindowDefaults.defaultContentSize.height
+        ))
+    }
 }
 
 enum SettingsWindowVisibilityNotification {
@@ -18,6 +39,35 @@ enum SettingsWindowCategorySelectionRequest {
 final class SettingsPanelWindow: NSWindow {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if isCommandW(event) {
+            requestCloseFromKeyboard()
+            return true
+        }
+
+        return super.performKeyEquivalent(with: event)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if isCommandW(event) {
+            requestCloseFromKeyboard()
+            return
+        }
+
+        super.keyDown(with: event)
+    }
+
+    private func isCommandW(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return event.keyCode == UInt16(kVK_ANSI_W) && flags == .command
+    }
+
+    private func requestCloseFromKeyboard() {
+        if delegate?.windowShouldClose?(self) != false {
+            close()
+        }
+    }
 }
 
 @MainActor
@@ -51,7 +101,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         window.title = ""
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
-        window.isMovableByWindowBackground = true
+        window.isMovableByWindowBackground = false
         window.isOpaque = false
         window.backgroundColor = .clear
         window.hasShadow = false
@@ -106,6 +156,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             object: self,
             userInfo: [SettingsWindowCategorySelectionRequest.categoryKey: category.rawValue]
         )
+    }
+
+    func resetToDefaultContentSize() {
+        SettingsWindowLayout.resetContentSize(of: window)
     }
 
     func dismiss() {

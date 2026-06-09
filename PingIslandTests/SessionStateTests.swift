@@ -185,6 +185,27 @@ final class SessionStateTests: XCTestCase {
         XCTAssertEqual(session.queueSortActivityDate, now)
     }
 
+    func testBoundedDisplayTextKeepsShortTextUnchanged() {
+        XCTAssertEqual(
+            SessionTextSanitizer.boundedDisplayText(
+                "short detail",
+                maxCharacters: 20,
+                truncationNotice: "[truncated]"
+            ),
+            "short detail"
+        )
+    }
+
+    func testBoundedDisplayTextTruncatesLongTextWithNotice() {
+        let result = SessionTextSanitizer.boundedDisplayText(
+            "abcdefghijklmnopqrstuvwxyz",
+            maxCharacters: 8,
+            truncationNotice: "[truncated]"
+        )
+
+        XCTAssertEqual(result, "abcdefgh\n\n[truncated]")
+    }
+
     func testIdleQueueSortActivityDateStillUsesLastUserMessageDateWhenPresent() {
         let now = Date()
         let lastUserMessageDate = now.addingTimeInterval(-60)
@@ -366,6 +387,42 @@ final class SessionStateTests: XCTestCase {
         XCTAssertTrue(session.supportsSessionScopedApproval)
     }
 
+    func testClaudeCodeHostedInQoderTerminalKeepsAutoApproveAction() {
+        let intervention = SessionIntervention(
+            id: "tool-1",
+            kind: .approval,
+            title: "Claude needs approval",
+            message: "Run Bash?",
+            options: [
+                SessionInterventionOption(id: "approve", title: "Allow Once", detail: nil),
+                SessionInterventionOption(id: "approveForSession", title: "Allow for Session", detail: nil),
+                SessionInterventionOption(id: "deny", title: "Deny", detail: nil)
+            ],
+            questions: [],
+            supportsSessionScope: false,
+            metadata: [:]
+        )
+        let session = SessionState(
+            sessionId: "claude-hosted-in-qoder",
+            cwd: "/tmp/project",
+            provider: .claude,
+            clientInfo: SessionClientInfo(
+                kind: .claudeCode,
+                name: "Claude Code",
+                originator: "Qoder",
+                terminalBundleIdentifier: "com.qoder.ide"
+            ),
+            intervention: intervention,
+            phase: .waitingForApproval(
+                PermissionContext(toolUseId: "tool-1", toolName: "Bash", toolInput: nil, receivedAt: Date())
+            )
+        )
+
+        XCTAssertEqual(session.scopedApprovalAction, .autoApprove)
+        XCTAssertTrue(session.supportsSessionScopedApproval)
+        XCTAssertEqual(session.clientInfo.ideHostBadgeLabel(for: .claude), "Qoder 终端")
+    }
+
     func testQoderWaitingForApprovalDoesNotExposeClaudeAutoApproveAction() {
         let session = SessionState(
             sessionId: "qoder-no-auto-approve",
@@ -379,6 +436,43 @@ final class SessionStateTests: XCTestCase {
 
         XCTAssertNil(session.scopedApprovalAction)
         XCTAssertFalse(session.supportsSessionScopedApproval)
+    }
+
+    func testQwenCodeWaitingForApprovalExposesAutoApproveAction() {
+        let intervention = SessionIntervention(
+            id: "tool-1",
+            kind: .approval,
+            title: "Qwen Code needs approval",
+            message: "Run shell command?",
+            options: [
+                SessionInterventionOption(id: "approve", title: "Allow Once", detail: nil),
+                SessionInterventionOption(id: "approveForSession", title: "Allow for Session", detail: nil),
+                SessionInterventionOption(id: "deny", title: "Deny", detail: nil)
+            ],
+            questions: [],
+            supportsSessionScope: false,
+            metadata: [:]
+        )
+        let session = SessionState(
+            sessionId: "qwen-auto-approve",
+            cwd: "/tmp/project",
+            provider: .claude,
+            clientInfo: SessionClientInfo(
+                kind: .custom,
+                profileID: "qwen-code",
+                name: "Qwen Code",
+                origin: "cli",
+                originator: "Qwen Code",
+                threadSource: "qwen-code-hooks"
+            ),
+            intervention: intervention,
+            phase: .waitingForApproval(
+                PermissionContext(toolUseId: "tool-1", toolName: "run_shell_command", toolInput: nil, receivedAt: Date())
+            )
+        )
+
+        XCTAssertEqual(session.scopedApprovalAction, .autoApprove)
+        XCTAssertTrue(session.supportsSessionScopedApproval)
     }
 
     func testCodexAppServerWaitingForApprovalUsesAllowSessionAction() {

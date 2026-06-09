@@ -839,23 +839,41 @@ struct InstanceRow: View {
         HStack(alignment: .center, spacing: 10) {
             avatarView
 
-            VStack(alignment: .leading, spacing: usesSingleLineCompactLayout ? 0 : 5) {
-                titleLine
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-
-                if shouldShowExpandedDetails {
-                    previewLinesView
-                        .transition(
-                            .opacity.combined(with: .move(edge: .top))
-                        )
-                }
-            }
+            leadingTextContent
 
             Spacer(minLength: 10)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
+    }
+
+    private var leadingTextContent: some View {
+        VStack(alignment: .leading, spacing: usesSingleLineCompactLayout ? 0 : 5) {
+            if shouldReserveIncomingPreviewLineHeight {
+                reservedPreviewCenteringSpacer
+            }
+
+            titleLine
+                .lineLimit(1)
+                .truncationMode(.tail)
+
+            if shouldShowExpandedDetails {
+                previewLinesView
+                    .transition(
+                        .opacity.combined(with: .move(edge: .top))
+                    )
+            }
+
+            if shouldReserveIncomingPreviewLineHeight {
+                reservedPreviewCenteringSpacer
+            }
+        }
+    }
+
+    private var reservedPreviewCenteringSpacer: some View {
+        Color.clear
+            .frame(height: reservedPreviewLineHeight / 2)
+            .accessibilityHidden(true)
     }
 
     private var titleLine: Text {
@@ -885,7 +903,8 @@ struct InstanceRow: View {
             MascotView(
                 kind: settings.mascotKind(for: session.mascotClient),
                 status: MascotStatus(session: session),
-                size: usesSingleLineCompactLayout ? 16 : 18
+                size: usesSingleLineCompactLayout ? 16 : 18,
+                animationTime: 0
             )
             .padding(6)
 
@@ -1173,12 +1192,6 @@ struct InstanceRow: View {
                         .foregroundColor(line.textColor)
                         .lineLimit(1)
                 }
-            }
-
-            if shouldReserveIncomingPreviewLineHeight {
-                Color.clear
-                    .frame(height: reservedPreviewLineHeight)
-                    .accessibilityHidden(true)
             }
         }
     }

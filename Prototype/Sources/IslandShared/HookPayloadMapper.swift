@@ -116,6 +116,14 @@ public enum HookPayloadMapper {
                isCodeBuddyFamilyHookClient(clientKind) {
                 return codeBuddyStdoutPayload(response: response, decision: decision)
             }
+            if clientKind == "qwen-code" {
+                return qwenCodePermissionPayload(
+                    response: response,
+                    decision: decision,
+                    eventType: eventType,
+                    metadata: metadata
+                )
+            }
             switch decision {
             case .approve:
                 return #"""
@@ -406,6 +414,12 @@ public enum HookPayloadMapper {
         if lowered.contains("notification") {
             return SessionStatus(kind: .notification)
         }
+        // Sub-agent events have to be matched before pretool/posttool/start/end
+        // because their names contain those substrings ("subagentstart" matches
+        // "start"). The parent session continues processing regardless.
+        if lowered == "subagentstart" || lowered == "subagentstop" {
+            return SessionStatus(kind: .runningTool)
+        }
         if lowered.contains("pretool") {
             return SessionStatus(kind: .runningTool)
         }
@@ -416,13 +430,25 @@ public enum HookPayloadMapper {
             return SessionStatus(kind: .active)
         }
         if lowered.contains("stop") || lowered.contains("end") {
-            // Kimi's "Stop" means "agent turn ended" (finished responding), not "session closed".
-            // Map it to .waitingForInput so completion notifications and sounds fire correctly.
-            // Only "SessionEnd" actually terminates a Kimi session.
-            if clientKind == "kimi", lowered == "stop" {
+            // Per Anthropic hook docs (and confirmed by farouqaldori/vibe-notch's
+            // shipped behavior): Stop / StopFailure mean "the agent finished its
+            // turn and is waiting for the next user input"; only SessionEnd
+            // actually terminates the session. The Kimi-only carve-out that
+            // previously lived here is now the default behavior for every
+            // shared-.claude client (claude-code, codebuddy, codebuddy-cli,
+            // qoderwork, qwen-code, hermes, openclaw, workbuddy, kimi).
+            switch lowered {
+            case "sessionend":
+                return SessionStatus(kind: .completed)
+            case "stop", "stopfailure":
                 return SessionStatus(kind: .waitingForInput)
+            default:
+                // Unknown stop/end variant from a future client we have not
+                // audited: stay conservative so we don't accumulate ghost
+                // sessions. The periodic liveness sweep is the safety net if
+                // we guessed wrong.
+                return SessionStatus(kind: .completed)
             }
-            return SessionStatus(kind: .completed)
         }
         if lowered.contains("compact") {
             return SessionStatus(kind: .compacting)
@@ -782,7 +808,7 @@ public enum HookPayloadMapper {
             return InterventionRequest(
                 sessionID: sessionKey,
                 kind: .question,
-                title: "\(provider.displayName) needs input",
+                title: "\(interventionDisplayName(provider: provider, clientKind: clientKind)) needs input",
                 message: (questions.first?["question"] as? String)
                     ?? (questions.first?["title"] as? String)
                     ?? "Answer required",
@@ -847,7 +873,7 @@ public enum HookPayloadMapper {
         return InterventionRequest(
             sessionID: sessionKey,
             kind: .approval,
-            title: "\(provider.displayName) needs approval",
+            title: "\(interventionDisplayName(provider: provider, clientKind: clientKind)) needs approval",
             message: message,
             options: [
                 InterventionOption(id: "approve", title: "Allow Once"),
@@ -1196,13 +1222,25 @@ public enum HookPayloadMapper {
     }
 
     private static func normalizedClientKind(from metadata: [String: String]) -> String? {
-        let bundleIdentifier = metadata["client_bundle_id"]?
+        let explicitClientKind = metadata["client_kind"]?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
-            ?? metadata["terminal_bundle_id"]?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .lowercased()
-        switch bundleIdentifier {
+        if let explicitClientKind, !explicitClientKind.isEmpty {
+            if explicitClientKind == "qoder-cli",
+               metadataHasQoderIDEHost(metadata) {
+                return "qoder"
+            }
+            if explicitClientKind == "qoder",
+               metadataLooksLikeQoderCLI(metadata) {
+                return "qoder-cli"
+            }
+            return explicitClientKind
+        }
+
+        let clientBundleIdentifier = metadata["client_bundle_id"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        switch clientBundleIdentifier {
         case "com.qoder.work":
             return "qoderwork"
         case "com.qoder.ide":
@@ -1211,18 +1249,7 @@ public enum HookPayloadMapper {
             break
         }
 
-        if let explicitClientKind = metadata["client_kind"]?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased(),
-           !explicitClientKind.isEmpty {
-            if explicitClientKind == "qoder",
-               metadataLooksLikeQoderCLI(metadata) {
-                return "qoder-cli"
-            }
-            return explicitClientKind
-        }
-
-        switch bundleIdentifier {
+        switch clientBundleIdentifier {
         case "com.tencent.codebuddy", "com.codebuddy.app":
             return "codebuddy"
         case "com.workbuddy.workbuddy":
@@ -1234,7 +1261,7 @@ public enum HookPayloadMapper {
         let nameHint = metadata["client_name"]?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
-            ?? metadata["client_originator"]?
+            ?? metadata["client"]?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .lowercased()
         if let nameHint {
@@ -1385,6 +1412,17 @@ public enum HookPayloadMapper {
             && nameHints.contains(where: { $0 == "qoder" || $0.contains("qoder ") })
     }
 
+    private static func metadataHasQoderIDEHost(_ metadata: [String: String]) -> Bool {
+        [
+            metadata["terminal_bundle_id"],
+            metadata["ide_bundle_id"]
+        ].contains { value in
+            value?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased() == "com.qoder.ide"
+        }
+    }
+
     private static func isCodeBuddyFamilyHookClient(_ clientKind: String?) -> Bool {
         guard let clientKind else { return false }
         switch clientKind {
@@ -1403,6 +1441,15 @@ public enum HookPayloadMapper {
             return "WorkBuddy"
         default:
             return "CodeBuddy"
+        }
+    }
+
+    private static func interventionDisplayName(provider: AgentProvider, clientKind: String?) -> String {
+        switch clientKind {
+        case "pi":
+            return "Pi Agent"
+        default:
+            return provider.displayName
         }
     }
 
@@ -1778,6 +1825,170 @@ public enum HookPayloadMapper {
         }
 
         return string
+    }
+
+    private static func qwenCodePermissionPayload(
+        response: BridgeResponse,
+        decision: InterventionDecision,
+        eventType: String,
+        metadata: [String: String]
+    ) -> String {
+        var decisionOutput: [String: Any]
+
+        switch decision {
+        case .approve:
+            decisionOutput = ["behavior": "allow"]
+        case .approveForSession:
+            decisionOutput = ["behavior": "allow"]
+            if eventType == "PermissionRequest",
+               let updatedPermissions = qwenCodeUpdatedPermissions(from: metadata),
+               !updatedPermissions.isEmpty {
+                decisionOutput["updatedPermissions"] = updatedPermissions
+            }
+        case .deny, .cancel:
+            decisionOutput = [
+                "behavior": "deny",
+                "message": response.reason ?? "Denied from Island"
+            ]
+        case .answer:
+            decisionOutput = ["behavior": "allow"]
+            if let updatedInput = response.updatedInput {
+                decisionOutput["updatedInput"] = updatedInput.mapValues(\.foundationObject)
+            }
+        }
+
+        let payload: [String: Any] = [
+            "hookSpecificOutput": [
+                "hookEventName": eventType,
+                "decision": decisionOutput
+            ]
+        ]
+        guard JSONSerialization.isValidJSONObject(payload),
+              let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]),
+              let string = String(data: data, encoding: .utf8) else {
+            return "{}"
+        }
+
+        return string
+    }
+
+    private static func qwenCodeUpdatedPermissions(from metadata: [String: String]) -> [String]? {
+        if let rules = decodedStringArray(from: firstNonEmpty(
+            metadata["updatedPermissions"],
+            metadata["updated_permissions"],
+            metadata["permission_rules"],
+            metadata["permissionRules"]
+        )) {
+            return rules
+        }
+
+        if let suggestions = decodedJSONArray(from: metadata["permission_suggestions"]) {
+            let suggestedRules = suggestions.flatMap { suggestion -> [String] in
+                guard let object = suggestion as? [String: Any] else {
+                    return (suggestion as? String).map { [$0] } ?? []
+                }
+
+                let suggestionType = (object["type"] as? String)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .lowercased()
+                guard suggestionType == nil || suggestionType == "allow" else {
+                    return []
+                }
+
+                return [
+                    "updatedPermissions",
+                    "updated_permissions",
+                    "permissionRules",
+                    "permission_rules",
+                    "permissions",
+                    "rules"
+                ].flatMap { key in stringArray(from: object[key]) }
+            }
+            if !suggestedRules.isEmpty {
+                return uniqueStrings(suggestedRules)
+            }
+        }
+
+        guard isQwenShellPermission(metadata),
+              let command = qwenShellCommand(from: metadata) else {
+            return nil
+        }
+        return ["Bash(\(command))"]
+    }
+
+    private static func isQwenShellPermission(_ metadata: [String: String]) -> Bool {
+        let toolName = (metadata["tool_name"] ?? metadata["toolName"] ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: "_", with: "")
+            .replacingOccurrences(of: "-", with: "")
+        return toolName == "runshellcommand" || toolName == "bash" || toolName == "shell"
+    }
+
+    private static func qwenShellCommand(from metadata: [String: String]) -> String? {
+        let rawInput = firstNonEmpty(metadata["tool_input_json"], metadata["toolInputJSON"])
+        guard let object = decodedJSONObject(from: rawInput) else {
+            return nil
+        }
+
+        return firstNonEmpty(
+            object["command"] as? String,
+            object["cmd"] as? String,
+            object["script"] as? String
+        )
+    }
+
+    private static func decodedJSONObject(from string: String?) -> [String: Any]? {
+        guard let string,
+              let data = string.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        return object
+    }
+
+    private static func decodedJSONArray(from string: String?) -> [Any]? {
+        guard let string,
+              let data = string.data(using: .utf8),
+              let array = try? JSONSerialization.jsonObject(with: data) as? [Any] else {
+            return nil
+        }
+        return array
+    }
+
+    private static func decodedStringArray(from string: String?) -> [String]? {
+        guard let string else { return nil }
+        if let array = decodedJSONArray(from: string) {
+            let values = array.compactMap { $0 as? String }
+            return values.isEmpty ? nil : values
+        }
+
+        let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : [trimmed]
+    }
+
+    private static func stringArray(from value: Any?) -> [String] {
+        switch value {
+        case let strings as [String]:
+            return strings
+        case let values as [Any]:
+            return values.compactMap { $0 as? String }
+        case let string as String:
+            return [string]
+        default:
+            return []
+        }
+    }
+
+    private static func uniqueStrings(_ values: [String]) -> [String] {
+        var seen = Set<String>()
+        return values.filter { value in
+            seen.insert(value).inserted
+        }
+    }
+
+    private static func firstNonEmpty(_ values: String?...) -> String? {
+        values.compactMap { nonEmpty($0) }.first
     }
 
     private static func qoderWorkAnswerPayload(

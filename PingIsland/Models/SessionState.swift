@@ -54,6 +54,7 @@ struct SessionState: Equatable, Identifiable, Sendable {
     var previewText: String?
     var latestHookMessage: String?
     var intervention: SessionIntervention?
+    var pendingInterventions: [SessionIntervention]
     var codexParentThreadId: String?
     var codexSubagentDepth: Int?
     var codexSubagentNickname: String?
@@ -133,6 +134,7 @@ struct SessionState: Equatable, Identifiable, Sendable {
         previewText: String? = nil,
         latestHookMessage: String? = nil,
         intervention: SessionIntervention? = nil,
+        pendingInterventions: [SessionIntervention] = [],
         codexParentThreadId: String? = nil,
         codexSubagentDepth: Int? = nil,
         codexSubagentNickname: String? = nil,
@@ -168,6 +170,7 @@ struct SessionState: Equatable, Identifiable, Sendable {
         self.previewText = previewText
         self.latestHookMessage = latestHookMessage
         self.intervention = intervention
+        self.pendingInterventions = pendingInterventions
         self.codexParentThreadId = codexParentThreadId
         self.codexSubagentDepth = codexSubagentDepth
         self.codexSubagentNickname = codexSubagentNickname
@@ -1026,7 +1029,7 @@ struct SessionState: Equatable, Identifiable, Sendable {
         }
 
         if provider == .claude,
-           clientInfo.kind == .claudeCode,
+           (clientInfo.kind == .claudeCode || clientInfo.isQwenCodeClient),
            intervention?.offersSessionScopedApproval == true {
             return .autoApprove
         }
@@ -1116,6 +1119,12 @@ struct SessionState: Equatable, Identifiable, Sendable {
         }
         let delay = isMailAgentSession ? Self.mailAutoArchiveDelay : Self.autoArchiveDelay
         return Date().timeIntervalSince(lastActivity) >= delay
+    }
+
+    /// Whether this session recently completed and should still appear in hover previews.
+    nonisolated var isRecentlyCompleted: Bool {
+        guard phase == .ended || phase == .idle else { return false }
+        return Date().timeIntervalSince(lastActivity) < Self.minimalCompactDelay
     }
 
     /// Older background sessions collapse to a header-only presentation in compact surfaces.

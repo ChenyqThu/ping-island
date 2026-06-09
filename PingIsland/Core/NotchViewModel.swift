@@ -50,6 +50,7 @@ class NotchViewModel: ObservableObject {
     @Published private(set) var isFullscreenPhysicalNotchCompactActive = false
     @Published private(set) var isFullscreenBrowserHiddenActive = false
     @Published private(set) var isIdleAutoHiddenActive = false
+    @Published private(set) var isQuietBackgroundPresentationActive = false
     @Published private(set) var isSettingsPopoverPresented = false
     @Published private(set) var isInlineTextInputActive = false
 
@@ -60,11 +61,6 @@ class NotchViewModel: ObservableObject {
     @Published private(set) var hasPhysicalNotch: Bool
 
     private static let defaultClosedHeight = ScreenNotchMetrics.fallbackClosedHeight
-    private static let defaultClosedWidth: CGFloat = 266
-    // Preserve the visible side rails that the default closed island has beyond
-    // the physical camera housing, so mascot/count content never sits under it.
-    private static let physicalNotchContentAllowance: CGFloat =
-        defaultClosedWidth - ScreenNotchMetrics.fallbackNotchWidth
     private static let clickedInstancesPanelWidthRatio: CGFloat = 0.44
     private static let clickedInstancesPanelMaximumWidth: CGFloat = 520
     private static let detachmentLongPressNarrowedWidthScale: CGFloat = 0.82
@@ -103,21 +99,12 @@ class NotchViewModel: ObservableObject {
         return systemHeight > 0 ? systemHeight : Self.defaultClosedHeight
     }
 
-    private var detectedClosedWidth: CGFloat {
-        Self.detectedClosedWidth(
-            deviceNotchRect: deviceNotchRect,
-            hasPhysicalNotch: hasPhysicalNotch
-        )
+    private func resolvedClosedWidth(preferredModuleWidthOverride: CGFloat? = nil) -> CGFloat {
+        preferredModuleWidthOverride ?? preferredModuleWidth
     }
 
-    private static func detectedClosedWidth(
-        deviceNotchRect: CGRect,
-        hasPhysicalNotch: Bool
-    ) -> CGFloat {
-        guard hasPhysicalNotch else { return defaultClosedWidth }
-        let systemWidth = ceil(deviceNotchRect.width)
-        guard systemWidth > 0 else { return defaultClosedWidth }
-        return max(defaultClosedWidth, systemWidth + physicalNotchContentAllowance)
+    private var preferredModuleWidth: CGFloat {
+        CGFloat(AppSettingsStore.normalizedNotchModuleWidth(notchModuleWidthProvider()))
     }
 
     static func shouldAutoCollapseHoverPreview(
@@ -136,26 +123,20 @@ class NotchViewModel: ObservableObject {
             && autoCollapseOnLeave
     }
 
-    private var narrowedClosedWidth: CGFloat {
-        if hasPhysicalNotch {
-            let systemWidth = ceil(deviceNotchRect.width)
-            if systemWidth > 0 {
-                return systemWidth
-            }
-        }
-
-        let baseWidth = detectedClosedWidth
+    private func narrowedClosedWidth(for baseWidth: CGFloat) -> CGFloat {
         return max(
+            CGFloat(AppSettingsStore.minimumNotchModuleWidth),
             baseWidth * Self.detachmentLongPressNarrowedWidthScale,
             baseWidth - Self.detachmentLongPressMaximumShrink
         )
     }
 
-    private var dockedClosedWidthTarget: CGFloat {
+    private func dockedClosedWidthTarget(preferredModuleWidthOverride: CGFloat? = nil) -> CGFloat {
+        let baseWidth = resolvedClosedWidth(preferredModuleWidthOverride: preferredModuleWidthOverride)
         guard presentationMode == .docked, detachmentTracking != nil else {
-            return detectedClosedWidth
+            return baseWidth
         }
-        return narrowedClosedWidth
+        return narrowedClosedWidth(for: baseWidth)
     }
 
     /// Dynamic opened size based on content type
@@ -280,6 +261,7 @@ class NotchViewModel: ObservableObject {
     private let fullscreenBrowserHiddenProvider: @MainActor (CGRect) -> Bool
     private let hideInFullscreenProvider: @MainActor () -> Bool
     private let autoHideWhenIdleProvider: @MainActor () -> Bool
+    private let notchModuleWidthProvider: @MainActor () -> Double
     private var hoverTimer: DispatchWorkItem?
     // Keep hover previews feeling responsive without making incidental cursor
     // passes over the notch expand it too aggressively.
@@ -324,6 +306,7 @@ class NotchViewModel: ObservableObject {
         hideInFullscreenProvider: @escaping @MainActor () -> Bool = { AppSettings.hideInFullscreen },
         fullscreenBrowserHiddenProvider: @escaping @MainActor (CGRect) -> Bool = FullscreenAppDetector.isFullscreenBrowserActive,
         autoHideWhenIdleProvider: @escaping @MainActor () -> Bool = { AppSettings.autoHideWhenIdle },
+        notchModuleWidthProvider: @escaping @MainActor () -> Double = { AppSettingsStore.defaultNotchModuleWidth },
         fullscreenStateSettleDelay: TimeInterval = 0.18
     ) {
         self.geometry = NotchGeometry(
@@ -332,15 +315,13 @@ class NotchViewModel: ObservableObject {
             windowHeight: windowHeight
         )
         self.hasPhysicalNotch = hasPhysicalNotch
-        self.closedWidth = Self.detectedClosedWidth(
-            deviceNotchRect: deviceNotchRect,
-            hasPhysicalNotch: hasPhysicalNotch
-        )
+        self.closedWidth = CGFloat(AppSettingsStore.normalizedNotchModuleWidth(notchModuleWidthProvider()))
         self.events = enableEventMonitoring ? EventMonitors.shared : nil
         self.fullscreenActivityProvider = fullscreenActivityProvider
         self.fullscreenBrowserHiddenProvider = fullscreenBrowserHiddenProvider
         self.hideInFullscreenProvider = hideInFullscreenProvider
         self.autoHideWhenIdleProvider = autoHideWhenIdleProvider
+        self.notchModuleWidthProvider = notchModuleWidthProvider
         self.fullscreenStateSettleDelay = fullscreenStateSettleDelay
         if enableEventMonitoring {
             setupEventHandlers()
@@ -408,6 +389,16 @@ class NotchViewModel: ObservableObject {
         AppSettings.shared.$maxPanelHeight
             .sink { [weak self] _ in
                 self?.objectWillChange.send()
+            }
+            .store(in: &cancellables)
+
+        AppSettings.shared.$notchModuleWidth
+            .sink { [weak self] width in
+                self?.syncClosedWidth(
+                    animated: true,
+                    animation: .easeOut(duration: 0.12),
+                    preferredModuleWidth: width
+                )
             }
             .store(in: &cancellables)
     }
@@ -725,6 +716,9 @@ class NotchViewModel: ObservableObject {
         if isIdleAutoHiddenActive && status != .opened {
             return true
         }
+        if isQuietBackgroundPresentationActive && status != .opened {
+            return true
+        }
         return false
     }
 
@@ -760,6 +754,11 @@ class NotchViewModel: ObservableObject {
         }
     }
 
+    func updateQuietBackgroundPresentationState(isActive: Bool) {
+        guard isQuietBackgroundPresentationActive != isActive else { return }
+        isQuietBackgroundPresentationActive = isActive
+    }
+
     private var fullscreenRevealTriggerRect: CGRect {
         let width = closedSize.width + (fullscreenRevealZoneHorizontalInset * 2)
         return CGRect(
@@ -771,7 +770,7 @@ class NotchViewModel: ObservableObject {
     }
 
     var detachmentTriggerScreenRect: CGRect {
-        geometry.notchScreenRect
+        closedScreenRect
     }
 
     // MARK: - Actions
@@ -977,9 +976,14 @@ class NotchViewModel: ObservableObject {
 
     private func syncClosedWidth(
         animated: Bool,
-        animation: Animation? = nil
+        animation: Animation? = nil,
+        preferredModuleWidth: Double? = nil
     ) {
-        let targetWidth = dockedClosedWidthTarget
+        let targetWidth = dockedClosedWidthTarget(
+            preferredModuleWidthOverride: preferredModuleWidth.map {
+                CGFloat(AppSettingsStore.normalizedNotchModuleWidth($0))
+            }
+        )
         guard closedWidth != targetWidth else { return }
 
         if animated, let animation {
@@ -1001,6 +1005,10 @@ class NotchViewModel: ObservableObject {
 
     func cancelDockedDetachmentTrackingForTesting() {
         cancelDockedDetachmentTracking()
+    }
+
+    func syncClosedWidthForTesting(preferredModuleWidth: Double) {
+        syncClosedWidth(animated: false, preferredModuleWidth: preferredModuleWidth)
     }
 #endif
 }

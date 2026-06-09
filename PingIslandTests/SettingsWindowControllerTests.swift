@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import XCTest
 @testable import Ping_Island
 
@@ -79,6 +80,7 @@ final class SettingsWindowControllerTests: XCTestCase {
 
         XCTAssertTrue(window.isVisible)
         XCTAssertFalse(window.isMiniaturized)
+        XCTAssertFalse(window.isMovableByWindowBackground)
         XCTAssertEqual(window.contentRect(forFrameRect: window.frame).size.width, SettingsWindowDefaults.defaultContentSize.width)
         XCTAssertEqual(window.contentRect(forFrameRect: window.frame).size.height, SettingsWindowDefaults.defaultContentSize.height)
 
@@ -89,6 +91,22 @@ final class SettingsWindowControllerTests: XCTestCase {
         XCTAssertFalse(window.isMiniaturized)
 
         controller.dismiss()
+    }
+
+    func testResetToDefaultContentSizeRestoresResizedSettingsWindow() throws {
+        let controller = SettingsWindowController.shared
+        controller.dismiss()
+        defer { controller.dismiss() }
+
+        controller.present()
+        let window = try XCTUnwrap(controller.window)
+        window.setContentSize(NSSize(width: 1000, height: 600))
+
+        controller.resetToDefaultContentSize()
+
+        let contentSize = window.contentRect(forFrameRect: window.frame).size
+        XCTAssertEqual(contentSize.width, SettingsWindowDefaults.defaultContentSize.width)
+        XCTAssertEqual(contentSize.height, SettingsWindowDefaults.defaultContentSize.height)
     }
 
     func testSettingsWindowPublishesVisibilityChanges() {
@@ -115,6 +133,29 @@ final class SettingsWindowControllerTests: XCTestCase {
         controller.dismiss()
 
         XCTAssertEqual(visibilityChanges, [true, false])
+    }
+
+    func testCommandWClosesSettingsWindow() throws {
+        let controller = SettingsWindowController.shared
+        controller.dismiss()
+
+        controller.present()
+        let window = try XCTUnwrap(controller.window)
+        let event = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [.command],
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            characters: "w",
+            charactersIgnoringModifiers: "w",
+            isARepeat: false,
+            keyCode: UInt16(kVK_ANSI_W)
+        ))
+
+        XCTAssertTrue(window.performKeyEquivalent(with: event))
+        XCTAssertFalse(window.isVisible)
     }
 
     func testPresentationModeWelcomeWindowStaysVisibleUntilCompleted() throws {

@@ -1018,6 +1018,110 @@ func codeBuddyCLIPermissionRequestAskUserQuestionBecomesInlineQuestion() throws 
 }
 
 @Test
+func piAgentClientMetadataCanBeInjectedFromBridgeArguments() throws {
+    let payload = """
+    {
+      "hook_event_name": "UserPromptSubmit",
+      "session_id": "pi-session-123",
+      "prompt": "Map the repo and suggest the next edit."
+    }
+    """.data(using: .utf8)!
+
+    let envelope = HookPayloadMapper.makeEnvelope(
+        source: .claude,
+        arguments: [
+            "island-bridge", "--source", "claude",
+            "--client-kind", "pi",
+            "--client-name", "Pi Agent",
+            "--client-origin", "cli",
+            "--client-originator", "Pi",
+            "--thread-source", "pi-extension"
+        ],
+        environment: ["PWD": "/tmp/demo"],
+        stdinData: payload
+    )
+
+    #expect(envelope.provider == .claude)
+    #expect(envelope.eventType == "UserPromptSubmit")
+    #expect(envelope.sessionKey == "claude:pi-session-123")
+    #expect(envelope.preview == "Map the repo and suggest the next edit.")
+    #expect(envelope.metadata["client_kind"] == "pi")
+    #expect(envelope.metadata["client_name"] == "Pi Agent")
+    #expect(envelope.metadata["client_origin"] == "cli")
+    #expect(envelope.metadata["client_originator"] == "Pi")
+    #expect(envelope.metadata["thread_source"] == "pi-extension")
+}
+
+@Test
+func piAgentPreToolUseMapsToolPayload() throws {
+    let payload = """
+    {
+      "hook_event_name": "PreToolUse",
+      "session_id": "pi-tool",
+      "tool_name": "Write",
+      "tool_input": {
+        "file_path": "/tmp/demo.txt",
+        "content": "hello"
+      }
+    }
+    """.data(using: .utf8)!
+
+    let envelope = HookPayloadMapper.makeEnvelope(
+        source: .claude,
+        arguments: [
+            "island-bridge", "--source", "claude",
+            "--client-kind", "pi",
+            "--client-name", "Pi Agent",
+            "--client-origin", "cli",
+            "--client-originator", "Pi",
+            "--thread-source", "pi-extension"
+        ],
+        environment: ["PWD": "/tmp/demo"],
+        stdinData: payload
+    )
+
+    #expect(envelope.eventType == "PreToolUse")
+    #expect(envelope.status?.kind == .runningTool)
+    #expect(envelope.metadata["tool_name"] == "Write")
+    #expect(envelope.metadata["tool_input_json"]?.contains("/tmp/demo.txt") == true)
+}
+
+@Test
+func piAgentPermissionRequestUsesPiApprovalTitle() throws {
+    let payload = """
+    {
+      "hook_event_name": "PermissionRequest",
+      "session_id": "pi-permission",
+      "tool_name": "Bash",
+      "tool_input": {
+        "command": "sudo make install"
+      }
+    }
+    """.data(using: .utf8)!
+
+    let envelope = HookPayloadMapper.makeEnvelope(
+        source: .claude,
+        arguments: [
+            "island-bridge", "--source", "claude",
+            "--client-kind", "pi",
+            "--client-name", "Pi Agent",
+            "--client-origin", "cli",
+            "--client-originator", "Pi",
+            "--thread-source", "pi-extension"
+        ],
+        environment: ["PWD": "/tmp/demo"],
+        stdinData: payload
+    )
+
+    #expect(envelope.eventType == "PermissionRequest")
+    #expect(envelope.status?.kind == .waitingForApproval)
+    #expect(envelope.expectsResponse == true)
+    #expect(envelope.intervention?.kind == .approval)
+    #expect(envelope.intervention?.title == "Pi Agent needs approval")
+    #expect(envelope.intervention?.message == "Bash")
+}
+
+@Test
 func qoderCLIExitPlanModePreToolUseBecomesBlockingApproval() throws {
     let payload = """
     {
@@ -1171,6 +1275,39 @@ func qoderCLIHooksExecutedInsideQoderIDEStayNotifyOnly() throws {
     #expect(envelope.expectsResponse == false)
     #expect(envelope.status?.kind == .waitingForInput)
     #expect(envelope.intervention == nil)
+    #expect(HookPayloadMapper.shouldDeliverEnvelope(envelope))
+}
+
+@Test
+func claudeHooksExecutedInsideQoderIDETerminalKeepClaudeApprovalOptions() throws {
+    let payload = """
+    {
+      "hook_event_name": "PermissionRequest",
+      "session_id": "claude-in-qoder-ide",
+      "tool_name": "Bash",
+      "tool_input": {
+        "command": "npm test"
+      }
+    }
+    """.data(using: .utf8)!
+
+    let envelope = HookPayloadMapper.makeEnvelope(
+        source: .claude,
+        arguments: ["island-bridge", "--source", "claude"],
+        environment: [
+            "TERM_PROGRAM": "vscode",
+            "__CFBundleIdentifier": "com.qoder.ide",
+            "VSCODE_GIT_IPC_HANDLE": "/Applications/Qoder.app/Contents/Resources/app/out/vs/workbench",
+            "PWD": "/tmp/demo"
+        ],
+        stdinData: payload
+    )
+
+    #expect(envelope.metadata["client_kind"] == nil)
+    #expect(envelope.metadata["terminal_bundle_id"] == "com.qoder.ide")
+    #expect(envelope.expectsResponse)
+    #expect(envelope.intervention?.kind == .approval)
+    #expect(envelope.intervention?.options.map(\.id) == ["approve", "approveForSession", "deny"])
     #expect(HookPayloadMapper.shouldDeliverEnvelope(envelope))
 }
 
@@ -1955,6 +2092,96 @@ func qwenCodePermissionRequestQuestionMapsToQuestionIntervention() throws {
 }
 
 @Test
+func qwenCodeShellPermissionRequestOffersSessionApproval() throws {
+    let payload = """
+    {
+      "hook_event_name": "PermissionRequest",
+      "session_id": "qwen-code-shell",
+      "permission_mode": "default",
+      "tool_name": "run_shell_command",
+      "tool_input": {
+        "command": "find /tmp -maxdepth 1 -type f"
+      },
+      "permission_suggestions": [
+        {
+          "type": "allow",
+          "label": "Allow Command",
+          "description": "Execute: find /tmp -maxdepth 1 -type f"
+        },
+        {
+          "type": "deny",
+          "label": "Deny",
+          "description": "Block this command execution"
+        }
+      ]
+    }
+    """.data(using: .utf8)!
+
+    let envelope = HookPayloadMapper.makeEnvelope(
+        source: .claude,
+        arguments: [
+            "island-bridge",
+            "--source", "claude",
+            "--client-kind", "qwen-code",
+            "--client-name", "Qwen Code",
+            "--thread-source", "qwen-code-hooks"
+        ],
+        environment: ["PWD": "/tmp/demo"],
+        stdinData: payload
+    )
+
+    #expect(envelope.eventType == "PermissionRequest")
+    #expect(envelope.status?.kind == .waitingForApproval)
+    #expect(envelope.expectsResponse == true)
+    #expect(envelope.intervention?.kind == .approval)
+    #expect(envelope.intervention?.options.map(\.id) == ["approve", "approveForSession", "deny"])
+    #expect(envelope.metadata["permission_suggestions"]?.contains("Allow Command") == true)
+}
+
+@Test
+func qwenCodeApproveForSessionPayloadUpdatesShellPermission() throws {
+    let payload = HookPayloadMapper.stdoutPayload(
+        for: .claude,
+        response: BridgeResponse(requestID: UUID(), decision: .approveForSession),
+        eventType: "PermissionRequest",
+        metadata: [
+            "client_kind": "qwen-code",
+            "tool_name": "run_shell_command",
+            "tool_input_json": #"{"command":"find /tmp -maxdepth 1 -type f"}"#
+        ]
+    )
+    let json = try #require(
+        JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any]
+    )
+    let hookSpecificOutput = try #require(json["hookSpecificOutput"] as? [String: Any])
+    #expect(hookSpecificOutput["hookEventName"] as? String == "PermissionRequest")
+    let decision = try #require(hookSpecificOutput["decision"] as? [String: Any])
+    #expect(decision["behavior"] as? String == "allow")
+    #expect(decision["updatedPermissions"] as? [String] == ["Bash(find /tmp -maxdepth 1 -type f)"])
+}
+
+@Test
+func qwenCodeApproveOncePayloadDoesNotUpdateShellPermission() throws {
+    let payload = HookPayloadMapper.stdoutPayload(
+        for: .claude,
+        response: BridgeResponse(requestID: UUID(), decision: .approve),
+        eventType: "PermissionRequest",
+        metadata: [
+            "client_kind": "qwen-code",
+            "tool_name": "run_shell_command",
+            "tool_input_json": #"{"command":"find /tmp -maxdepth 1 -type f"}"#
+        ]
+    )
+    let json = try #require(
+        JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any]
+    )
+    let hookSpecificOutput = try #require(json["hookSpecificOutput"] as? [String: Any])
+    let decision = try #require(hookSpecificOutput["decision"] as? [String: Any])
+    #expect(decision["behavior"] as? String == "allow")
+    #expect(decision["updatedPermissions"] == nil)
+}
+
+@Test
 func qwenCodeNotificationPermissionPromptCreatesApprovalIntervention() throws {
     let payload = """
     {
@@ -2214,7 +2441,10 @@ func qwenCodeStopUsesLastAssistantMessageAsPreview() throws {
     )
 
     #expect(envelope.eventType == "Stop")
-    #expect(envelope.status?.kind == .completed)
+    // Updated by fix-claude-sound-triggers: Stop now means "agent turn ended,
+    // ready for user input" for every shared-.claude client (was .completed
+    // pre-fix, which incorrectly killed the session).
+    #expect(envelope.status?.kind == .waitingForInput)
     #expect(envelope.preview == "Done. I updated the files and left notes in the summary.")
 }
 
@@ -2271,7 +2501,9 @@ func hermesStopUsesLastAssistantMessageAsPreview() throws {
     )
 
     #expect(envelope.eventType == "Stop")
-    #expect(envelope.status?.kind == .completed)
+    // Updated by fix-claude-sound-triggers: Stop now means "agent turn ended,
+    // ready for user input" for every shared-.claude client.
+    #expect(envelope.status?.kind == .waitingForInput)
     #expect(envelope.preview == "Done. I inspected the tool calls and wrote the follow-up notes.")
 }
 
@@ -2376,4 +2608,156 @@ func copilotStdoutPayloadUsesPermissionDecisionAndModifiedArgs() throws {
     let modifiedArgs = try #require(json["modifiedArgs"] as? [String: String])
     #expect(modifiedArgs["path"] == "/tmp/demo.swift")
     #expect(modifiedArgs["replace"] == "updated")
+}
+
+// MARK: - Stop family mapping (fix-claude-sound-triggers)
+
+@Test
+func claudeStopMapsToWaitingForInput() throws {
+    let payload = """
+    {
+      "hook_event_name": "Stop",
+      "session_id": "claude-stop-1"
+    }
+    """.data(using: .utf8)!
+
+    let envelope = HookPayloadMapper.makeEnvelope(
+        source: .claude,
+        arguments: ["island-bridge", "--source", "claude"],
+        environment: ["TERM_PROGRAM": "iTerm.app", "PWD": "/tmp/demo"],
+        stdinData: payload
+    )
+
+    #expect(envelope.eventType == "Stop")
+    #expect(envelope.status?.kind == .waitingForInput)
+    #expect(envelope.intervention == nil)
+}
+
+@Test
+func claudeSubagentStopMapsToRunningTool() throws {
+    let payload = """
+    {
+      "hook_event_name": "SubagentStop",
+      "session_id": "claude-subagent-1"
+    }
+    """.data(using: .utf8)!
+
+    let envelope = HookPayloadMapper.makeEnvelope(
+        source: .claude,
+        arguments: ["island-bridge", "--source", "claude"],
+        environment: ["TERM_PROGRAM": "iTerm.app", "PWD": "/tmp/demo"],
+        stdinData: payload
+    )
+
+    #expect(envelope.eventType == "SubagentStop")
+    #expect(envelope.status?.kind == .runningTool)
+}
+
+@Test
+func claudeSubagentStartMapsToRunningTool() throws {
+    let payload = """
+    {
+      "hook_event_name": "SubagentStart",
+      "session_id": "claude-subagent-2"
+    }
+    """.data(using: .utf8)!
+
+    let envelope = HookPayloadMapper.makeEnvelope(
+        source: .claude,
+        arguments: ["island-bridge", "--source", "claude"],
+        environment: ["TERM_PROGRAM": "iTerm.app", "PWD": "/tmp/demo"],
+        stdinData: payload
+    )
+
+    #expect(envelope.eventType == "SubagentStart")
+    #expect(envelope.status?.kind == .runningTool)
+}
+
+@Test
+func claudeStopFailureMapsToWaitingForInput() throws {
+    let payload = """
+    {
+      "hook_event_name": "StopFailure",
+      "session_id": "claude-stopfail-1",
+      "error": "rate_limit"
+    }
+    """.data(using: .utf8)!
+
+    let envelope = HookPayloadMapper.makeEnvelope(
+        source: .claude,
+        arguments: ["island-bridge", "--source", "claude"],
+        environment: ["TERM_PROGRAM": "iTerm.app", "PWD": "/tmp/demo"],
+        stdinData: payload
+    )
+
+    #expect(envelope.eventType == "StopFailure")
+    #expect(envelope.status?.kind == .waitingForInput)
+}
+
+@Test
+func claudeSessionEndMapsToCompleted() throws {
+    let payload = """
+    {
+      "hook_event_name": "SessionEnd",
+      "session_id": "claude-end-1"
+    }
+    """.data(using: .utf8)!
+
+    let envelope = HookPayloadMapper.makeEnvelope(
+        source: .claude,
+        arguments: ["island-bridge", "--source", "claude"],
+        environment: ["TERM_PROGRAM": "iTerm.app", "PWD": "/tmp/demo"],
+        stdinData: payload
+    )
+
+    #expect(envelope.eventType == "SessionEnd")
+    #expect(envelope.status?.kind == .completed)
+}
+
+@Test
+func kimiStopMapsToWaitingForInputSameAsClaude() throws {
+    // Regression: kimi previously had a special carve-out; behavior is now the
+    // same as claude's default. Test ensures the kimi path is unchanged.
+    let payload = """
+    {
+      "hook_event_name": "Stop",
+      "session_id": "kimi-stop-1"
+    }
+    """.data(using: .utf8)!
+
+    let envelope = HookPayloadMapper.makeEnvelope(
+        source: .kimi,
+        arguments: [
+            "island-bridge",
+            "--source", "kimi",
+            "--client-kind", "kimi"
+        ],
+        environment: ["TERM_PROGRAM": "iTerm.app", "PWD": "/tmp/demo"],
+        stdinData: payload
+    )
+
+    #expect(envelope.eventType == "Stop")
+    #expect(envelope.status?.kind == .waitingForInput)
+}
+
+@Test
+func unknownStopVariantFallsBackToCompleted() throws {
+    // Conservative default: an unknown stop/end-substring event we have not
+    // audited stays mapped to .completed so we don't accumulate ghost sessions.
+    let payload = """
+    {
+      "hook_event_name": "MysteryStopThing",
+      "session_id": "claude-mystery-1"
+    }
+    """.data(using: .utf8)!
+
+    let envelope = HookPayloadMapper.makeEnvelope(
+        source: .claude,
+        arguments: ["island-bridge", "--source", "claude"],
+        environment: ["TERM_PROGRAM": "iTerm.app", "PWD": "/tmp/demo"],
+        stdinData: payload
+    )
+
+    #expect(envelope.eventType == "MysteryStopThing")
+    #expect(envelope.status?.kind == .completed)
 }

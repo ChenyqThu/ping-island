@@ -139,7 +139,7 @@ final class NotchViewModelTests: XCTestCase {
             )
 
             XCTAssertEqual(viewModel.closedHeight, 38)
-            XCTAssertEqual(viewModel.closedSize, CGSize(width: 306, height: 38))
+            XCTAssertEqual(viewModel.closedSize, CGSize(width: 266, height: 38))
         }
     }
 
@@ -155,8 +155,100 @@ final class NotchViewModelTests: XCTestCase {
                 fullscreenActivityProvider: { _ in false }
             )
 
-            XCTAssertEqual(viewModel.closedWidth, 398)
-            XCTAssertEqual(viewModel.closedSize, CGSize(width: 398, height: 38))
+            XCTAssertEqual(viewModel.closedWidth, 266)
+            XCTAssertEqual(viewModel.closedSize, CGSize(width: 266, height: 38))
+        }
+    }
+
+    func testConfiguredNotchModuleWidthControlsExternalDisplayClosedWidth() async {
+        await MainActor.run {
+            let viewModel = NotchViewModel(
+                deviceNotchRect: CGRect(x: 0, y: 0, width: 224, height: 38),
+                screenRect: CGRect(x: 0, y: 0, width: 2560, height: 1440),
+                windowHeight: 320,
+                hasPhysicalNotch: false,
+                enableEventMonitoring: false,
+                observeSystemEnvironment: false,
+                fullscreenActivityProvider: { _ in false },
+                notchModuleWidthProvider: { 212 }
+            )
+
+            XCTAssertEqual(viewModel.closedWidth, 212)
+            XCTAssertEqual(viewModel.closedSize, CGSize(width: 212, height: 32))
+        }
+    }
+
+    func testPublishedNotchModuleWidthValueAppliesWithoutWaitingForProviderRefresh() async {
+        await MainActor.run {
+            let viewModel = NotchViewModel(
+                deviceNotchRect: CGRect(x: 0, y: 0, width: 224, height: 38),
+                screenRect: CGRect(x: 0, y: 0, width: 2560, height: 1440),
+                windowHeight: 320,
+                hasPhysicalNotch: false,
+                enableEventMonitoring: false,
+                observeSystemEnvironment: false,
+                fullscreenActivityProvider: { _ in false },
+                notchModuleWidthProvider: { 266 }
+            )
+
+            viewModel.syncClosedWidthForTesting(preferredModuleWidth: 128)
+
+            XCTAssertEqual(viewModel.closedWidth, 128)
+            XCTAssertEqual(viewModel.openedSize.width, 520)
+        }
+    }
+
+    func testMinimumNotchModuleWidthSupportsIconOnlyExternalDisplayClosedWidth() async {
+        await MainActor.run {
+            let viewModel = NotchViewModel(
+                deviceNotchRect: CGRect(x: 0, y: 0, width: 224, height: 38),
+                screenRect: CGRect(x: 0, y: 0, width: 2560, height: 1440),
+                windowHeight: 320,
+                hasPhysicalNotch: false,
+                enableEventMonitoring: false,
+                observeSystemEnvironment: false,
+                fullscreenActivityProvider: { _ in false },
+                notchModuleWidthProvider: { AppSettingsStore.minimumNotchModuleWidth }
+            )
+
+            XCTAssertEqual(viewModel.closedWidth, AppSettingsStore.minimumNotchModuleWidth)
+            XCTAssertGreaterThanOrEqual(viewModel.closedSize.width, 64)
+        }
+    }
+
+    func testMinimumNotchModuleWidthSupportsIconOnlyPhysicalDisplayClosedWidth() async {
+        await MainActor.run {
+            let viewModel = NotchViewModel(
+                deviceNotchRect: CGRect(x: 0, y: 0, width: 220, height: 38),
+                screenRect: CGRect(x: 0, y: 0, width: 1512, height: 982),
+                windowHeight: 320,
+                hasPhysicalNotch: true,
+                enableEventMonitoring: false,
+                observeSystemEnvironment: false,
+                fullscreenActivityProvider: { _ in false },
+                notchModuleWidthProvider: { AppSettingsStore.minimumNotchModuleWidth }
+            )
+
+            XCTAssertEqual(viewModel.closedWidth, AppSettingsStore.minimumNotchModuleWidth)
+            XCTAssertEqual(viewModel.closedSize, CGSize(width: 64, height: 38))
+        }
+    }
+
+    func testConfiguredNotchModuleWidthControlsPhysicalNotchClosedWidth() async {
+        await MainActor.run {
+            let viewModel = NotchViewModel(
+                deviceNotchRect: CGRect(x: 0, y: 0, width: 220, height: 38),
+                screenRect: CGRect(x: 0, y: 0, width: 1512, height: 982),
+                windowHeight: 320,
+                hasPhysicalNotch: true,
+                enableEventMonitoring: false,
+                observeSystemEnvironment: false,
+                fullscreenActivityProvider: { _ in false },
+                notchModuleWidthProvider: { 180 }
+            )
+
+            XCTAssertEqual(viewModel.closedWidth, 180)
+            XCTAssertEqual(viewModel.closedSize, CGSize(width: 180, height: 38))
         }
     }
 
@@ -169,7 +261,8 @@ final class NotchViewModelTests: XCTestCase {
                 hasPhysicalNotch: true,
                 enableEventMonitoring: false,
                 observeSystemEnvironment: false,
-                fullscreenActivityProvider: { _ in false }
+                fullscreenActivityProvider: { _ in false },
+                notchModuleWidthProvider: { 398 }
             )
 
             viewModel.updateOpenedMeasuredHeight(260)
@@ -363,6 +456,35 @@ final class NotchViewModelTests: XCTestCase {
         }
     }
 
+    func testQuietBackgroundHidesClosedDockedPresentationButPreservesOpenedPanel() async {
+        let viewModel = await MainActor.run {
+            NotchViewModel(
+                deviceNotchRect: .zero,
+                screenRect: CGRect(x: 0, y: 0, width: 1440, height: 900),
+                windowHeight: 320,
+                hasPhysicalNotch: false,
+                enableEventMonitoring: false,
+                observeSystemEnvironment: false
+            )
+        }
+
+        await MainActor.run {
+            viewModel.updateQuietBackgroundPresentationState(isActive: true)
+
+            XCTAssertTrue(viewModel.isQuietBackgroundPresentationActive)
+            XCTAssertTrue(viewModel.shouldHideWindowPresentation)
+
+            viewModel.notchOpen(reason: .click)
+            XCTAssertFalse(viewModel.shouldHideWindowPresentation)
+
+            viewModel.notchClose()
+            XCTAssertTrue(viewModel.shouldHideWindowPresentation)
+
+            viewModel.updateQuietBackgroundPresentationState(isActive: false)
+            XCTAssertFalse(viewModel.shouldHideWindowPresentation)
+        }
+    }
+
     func testToggleChatClosesWhenSameSessionIsAlreadyVisible() async {
         await MainActor.run {
             let viewModel = makeViewModel()
@@ -419,7 +541,7 @@ final class NotchViewModelTests: XCTestCase {
         )
     }
 
-    func testDetachmentTriggerScreenRectUsesFixedPhysicalNotchRegion() async {
+    func testDetachmentTriggerScreenRectTracksClosedNotchFootprint() async {
         await MainActor.run {
             let viewModel = NotchViewModel(
                 deviceNotchRect: CGRect(x: 0, y: 0, width: 220, height: 38),
@@ -431,7 +553,7 @@ final class NotchViewModelTests: XCTestCase {
                 fullscreenActivityProvider: { _ in false }
             )
 
-            XCTAssertEqual(viewModel.detachmentTriggerScreenRect, viewModel.geometry.notchScreenRect)
+            XCTAssertEqual(viewModel.detachmentTriggerScreenRect, viewModel.closedScreenRect)
         }
     }
 
@@ -455,7 +577,7 @@ final class NotchViewModelTests: XCTestCase {
         }
     }
 
-    func testDockedDetachmentLongPressNarrowsToPhysicalNotchWidth() async {
+    func testDockedDetachmentLongPressNarrowsConfiguredClosedWidthOnPhysicalNotch() async {
         await MainActor.run {
             let viewModel = NotchViewModel(
                 deviceNotchRect: CGRect(x: 0, y: 0, width: 220, height: 38),
@@ -469,7 +591,7 @@ final class NotchViewModelTests: XCTestCase {
 
             viewModel.beginDockedDetachmentTrackingForTesting()
 
-            XCTAssertEqual(viewModel.closedWidth, 220)
+            XCTAssertEqual(viewModel.closedWidth, 218.12, accuracy: 0.01)
         }
     }
 
@@ -726,6 +848,32 @@ final class NotchViewModelTests: XCTestCase {
             )
 
             policySubject.send(EnergyPolicy.policy(for: .quietBackground))
+
+            XCTAssertEqual(recorder.stopCallCount, 4)
+            XCTAssertEqual(
+                Array(recorder.startedMasks.suffix(3)),
+                [.leftMouseDown, .leftMouseDragged, .leftMouseUp]
+            )
+            XCTAssertEqual(monitors.mouseLocation.value, .zero)
+        }
+    }
+
+    func testEventMonitorsDropMouseMoveInVisibleIdleEnergyPolicy() async {
+        await MainActor.run {
+            let notificationCenter = NotificationCenter()
+            let workspaceNotificationCenter = NotificationCenter()
+            let recorder = MonitorRecorder()
+            let policySubject = PassthroughSubject<EnergyPolicy, Never>()
+
+            let monitors = EventMonitors(
+                notificationCenter: notificationCenter,
+                workspaceNotificationCenter: workspaceNotificationCenter,
+                currentMouseLocation: { .zero },
+                monitorFactory: recorder.makeMonitor(mask:handler:),
+                energyPolicyPublisher: policySubject.eraseToAnyPublisher()
+            )
+
+            policySubject.send(EnergyPolicy.policy(for: .idleVisible))
 
             XCTAssertEqual(recorder.stopCallCount, 4)
             XCTAssertEqual(

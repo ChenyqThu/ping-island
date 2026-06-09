@@ -151,11 +151,15 @@ final class DetachedIslandViewController: NSViewController {
 final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate {
     private static let defaultTrailingInset: CGFloat = 32
     private static let defaultBottomInset: CGFloat = 48
+    private static let quietBackgroundWindowAlpha: CGFloat = 0.38
+    private static let interactiveWindowAlpha: CGFloat = 1
 
     private let viewModel: NotchViewModel
     private let sessionMonitor: SessionMonitor
     private let onClose: () -> Void
     private let onPetAnchorChanged: (CGPoint) -> Void
+    private let energyModePublisher: AnyPublisher<EnergyMode, Never>
+    var onRedockRequested: (() -> Void)?
     private let interactionModel = DetachedIslandInteractionModel()
     private let bubbleViewState = DetachedIslandBubbleViewState()
     private var manualAttentionTracker = SessionManualAttentionTracker()
@@ -176,6 +180,7 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
     private var petMouseDownPoint: CGPoint?
     private var petMouseDownScreenPoint: CGPoint?
     private var isPetDragActive = false
+    private var isPetInNotchZone = false
     private var isPetSecondaryClickArmed = false
     private var hasPrimedSoundTransitions = false
     private var previousProcessingIds = Set<String>()
@@ -185,11 +190,13 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
     private var previousResourceLimitIds = Set<String>()
     private var previousCompletionNotificationPhases: [String: SessionPhase] = [:]
     private var completionNotificationQueue: [SessionCompletionNotification] = []
+    private var currentEnergyMode: EnergyMode = .quietBackground
     var bubbleHoverGraceDelay: TimeInterval = 3
     var completionNotificationDismissDelay: TimeInterval = 5
     private var activeCompletionNotification: SessionCompletionNotification? {
         didSet {
             bubbleViewState.setActiveCompletionNotification(activeCompletionNotification)
+            updateQuietBackgroundWindowOpacity(animated: true)
         }
     }
 
@@ -201,12 +208,14 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
         viewModel: NotchViewModel,
         sessionMonitor: SessionMonitor,
         onClose: @escaping () -> Void,
-        onPetAnchorChanged: @escaping (CGPoint) -> Void = { _ in }
+        onPetAnchorChanged: @escaping (CGPoint) -> Void = { _ in },
+        energyModePublisher: AnyPublisher<EnergyMode, Never>? = nil
     ) {
         self.viewModel = viewModel
         self.sessionMonitor = sessionMonitor
         self.onClose = onClose
         self.onPetAnchorChanged = onPetAnchorChanged
+        self.energyModePublisher = energyModePublisher ?? EnergyGovernor.shared.$mode.eraseToAnyPublisher()
         self.lastAppliedLayout = Self.windowLayout(
             for: viewModel,
             sessionMonitor: sessionMonitor
@@ -247,6 +256,7 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
         window.tabbingMode = .disallowed
         window.isReleasedWhenClosed = false
+        window.alphaValue = Self.quietBackgroundWindowAlpha
 
         super.init(window: window)
 
@@ -323,6 +333,7 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
         )
         window.setFrame(initialFrame, display: false)
         updateBubblePlacementForCurrentWindow()
+        updateQuietBackgroundWindowOpacity(animated: false)
         showWindow(
             window,
             activatesApplication: activatesApplication
@@ -361,6 +372,7 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
         let frame = NSRect(origin: origin, size: lastAppliedLayout.containerSize)
         window.setFrame(frame, display: false)
         updateBubblePlacementForCurrentWindow()
+        updateQuietBackgroundWindowOpacity(animated: false)
         showWindow(
             window,
             activatesApplication: activatesApplication
@@ -436,6 +448,7 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
         )
         window.setFrameOrigin(origin)
         updateBubblePlacementForCurrentWindow()
+        isPetInNotchZone = isPetAnchorInNotchZone()
     }
 
     func beginFloatingDrag() {
@@ -443,6 +456,7 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
         cancelInteractionActivation()
         interactionModel.resetForDragSuppression()
         interactionModel.setPetDragging(true)
+        updateQuietBackgroundWindowOpacity(animated: true)
         hideBubbleRenderingImmediately()
         floatingDragStartOrigin = window?.frame.origin
     }
@@ -461,14 +475,31 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
         )
         window.setFrameOrigin(origin)
         updateBubblePlacementForCurrentWindow()
+        isPetInNotchZone = isPetAnchorInNotchZone()
     }
 
     func endFloatingDrag() {
         floatingDragStartOrigin = nil
         interactionModel.setPetDragging(false)
+        if isPetInNotchZone {
+            isPetInNotchZone = false
+            onRedockRequested?()
+            return
+        }
         if let currentPetAnchor {
             onPetAnchorChanged(currentPetAnchor)
         }
+        updateQuietBackgroundWindowOpacity(animated: true)
+        activateInteraction()
+    }
+
+    func endWindowDrag() {
+        if isPetInNotchZone {
+            isPetInNotchZone = false
+            onRedockRequested?()
+            return
+        }
+        updateQuietBackgroundWindowOpacity(animated: true)
         activateInteraction()
     }
 
@@ -534,6 +565,15 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
         interactionModel.isPetDragging
     }
 
+    var windowAlphaForTesting: CGFloat? {
+        window?.alphaValue
+    }
+
+    func applyEnergyModeForTesting(_ mode: EnergyMode) {
+        currentEnergyMode = mode
+        updateQuietBackgroundWindowOpacity(animated: false)
+    }
+
     func applySessionSnapshotForTesting(_ sessions: [SessionState]) {
         sessionMonitor.instances = sessions
         handleManualAttentionChange()
@@ -574,6 +614,7 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
         floatingDragStartOrigin = nil
         interactionModel.setPetDragging(false)
         window?.orderOut(nil)
+        window?.alphaValue = Self.interactiveWindowAlpha
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
@@ -639,6 +680,24 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.scheduleWindowSizeUpdate()
+            }
+            .store(in: &cancellables)
+
+        interactionModel.$isPetDragging
+            .dropFirst()
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.updateQuietBackgroundWindowOpacity(animated: true)
+            }
+            .store(in: &cancellables)
+
+        energyModePublisher
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] mode in
+                guard let self else { return }
+                self.currentEnergyMode = mode
+                self.updateQuietBackgroundWindowOpacity(animated: true)
             }
             .store(in: &cancellables)
 
@@ -1072,16 +1131,33 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
     }
 
     private func screenPoint(for event: NSEvent) -> CGPoint {
-        // Window movement and hit-testing use AppKit screen coordinates (origin at bottom-left).
         MouseEventReplay.appKitScreenLocation(
             for: event,
             fallbackScreenLocation: NSEvent.mouseLocation
         )
     }
 
+    private func isPetAnchorInNotchZone() -> Bool {
+        guard let petAnchor = currentPetAnchor else { return false }
+        let targetRect: CGRect
+        if viewModel.shouldHideWindowPresentation {
+            let screenRect = viewModel.screenRect
+            targetRect = CGRect(
+                x: screenRect.midX - 80,
+                y: screenRect.maxY - 60,
+                width: 160,
+                height: 60
+            )
+        } else {
+            targetRect = viewModel.closedScreenRect.insetBy(dx: -30, dy: -30)
+        }
+        return targetRect.contains(petAnchor)
+    }
+
     private func syncBubblePresentation(to targetState: DetachedIslandBubbleState) {
         bubbleVisibilityWorkItem?.cancel()
         bubbleVisibilityWorkItem = nil
+        updateQuietBackgroundWindowOpacity(animated: true)
 
         switch targetState {
         case .hidden:
@@ -1125,6 +1201,7 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
             guard self.interactionModel.bubbleState == .hidden else { return }
             self.applyWindowSizeUpdateImmediately(renderedBubbleState: .hidden)
             self.bubbleViewState.prepareLayout(for: .hidden)
+            self.updateQuietBackgroundWindowOpacity(animated: true)
         }
 
         bubbleVisibilityWorkItem = workItem
@@ -1150,6 +1227,30 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
         syncOutsideClickMonitor()
         reconcileHighlightedSessionState()
         recordBubbleTelemetryTransition(from: previousState, to: interactionModel.bubbleState)
+    }
+
+    private var shouldDimForQuietBackground: Bool {
+        currentEnergyMode == .quietBackground
+            && interactionModel.bubbleState == .hidden
+            && !interactionModel.isPetDragging
+            && activeCompletionNotification == nil
+    }
+
+    private func updateQuietBackgroundWindowOpacity(animated: Bool) {
+        guard let window else { return }
+        let targetAlpha = shouldDimForQuietBackground
+            ? Self.quietBackgroundWindowAlpha
+            : Self.interactiveWindowAlpha
+        guard abs(window.alphaValue - targetAlpha) > 0.01 else { return }
+
+        if animated {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.18
+                window.animator().alphaValue = targetAlpha
+            }
+        } else {
+            window.alphaValue = targetAlpha
+        }
     }
 
     private func recordBubbleTelemetryTransition(
@@ -1719,12 +1820,12 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
     private func primeSoundTransitions(_ instances: [SessionState]) {
         previousProcessingIds = Set(
             instances
-                .filter { $0.phase == .processing || $0.phase == .compacting }
+                .filter(\.phase.contributesToProcessingSoundEdge)
                 .map(\.stableId)
         )
         previousAttentionSoundIds = Set(
             instances
-                .filter { $0.needsApprovalResponse || ($0.phase == .waitingForInput && $0.intervention != nil) }
+                .filter(SessionAttentionSoundEvaluator.shouldContributeToAttentionSoundEdge)
                 .map(\.stableId)
         )
         previousCompletionSoundIds = Set(
@@ -1751,12 +1852,10 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
             return
         }
 
-        let processingSessions = instances.filter {
-            $0.phase == .processing || $0.phase == .compacting
-        }
-        let attentionSessions = instances.filter {
-            $0.needsApprovalResponse || ($0.phase == .waitingForInput && $0.intervention != nil)
-        }
+        let processingSessions = instances.filter(\.phase.contributesToProcessingSoundEdge)
+        let attentionSessions = instances.filter(
+            SessionAttentionSoundEvaluator.shouldContributeToAttentionSoundEdge
+        )
         let completedSessions = instances.filter { SessionCompletionStateEvaluator.isCompletedReadySession($0) }
         let resourceLimitedSessions = instances.filter {
             $0.phase == .compacting

@@ -59,11 +59,15 @@ actor SessionStore {
     private var pendingQoderConversationPolls: [String: (id: UUID, task: Task<Void, Never>)] = [:]
     private var pendingOpenClawConversationPolls: [String: (id: UUID, task: Task<Void, Never>)] = [:]
     private var pendingCodeBuddyCLIQuestionPolls: [String: (id: UUID, task: Task<Void, Never>)] = [:]
+    private var lastCodexRolloutParseAt: [String: Date] = [:]
+    private var codexRolloutParsesInFlight: Set<String> = []
     private var codexSessionAliases: [String: String] = [:]
     private var ignoredCodexAuxiliaryHookSessionIds: Set<String> = []
 
     /// Sync debounce interval (100ms)
     private let syncDebounceNs: UInt64 = 100_000_000
+    private let codexRolloutParseFallbackInterval: TimeInterval = 2
+    private let codexRolloutParseWithAppServerInterval: TimeInterval = 30
     private let codexHookPlaceholderPruneDelayNs: UInt64 = 10_000_000_000
     private let codexAppServerPlaceholderPruneDelayNs: UInt64 = 60_000_000_000
     private let codexContinuationMergeWindow: TimeInterval = 10 * 60
@@ -86,10 +90,19 @@ actor SessionStore {
         SessionStore.cancelPendingHookResponse(toolUseId: $0, ingress: $1)
     }
 
+    /// Periodic sweep that removes sessions whose Claude process has died
+    /// without delivering `SessionEnd` (Ctrl-C kill, OOM, terminal closed) and
+    /// garbage-collects sessions already in `.ended` phase. Borrowed from
+    /// `farouqaldori/vibe-notch`'s liveness check; runs every 5 s while the
+    /// monitor is started.
+    private var livenessSweepTask: Task<Void, Never>?
+    private let livenessSweepIntervalNs: UInt64 = 5_000_000_000
+
     // MARK: - Published State (for UI)
 
     /// Publisher for session state changes (nonisolated for Combine subscription from any context)
     private nonisolated(unsafe) let sessionsSubject = CurrentValueSubject<[SessionState], Never>([])
+    private var lastPublishedSessions: [SessionState] = []
 
     /// Public publisher for UI subscription
     nonisolated var sessionsPublisher: AnyPublisher<[SessionState], Never> {
@@ -304,6 +317,7 @@ actor SessionStore {
         sessions[handle.sessionID] = session
         Task {
             await TelemetryService.shared.recordSessionDetected(session)
+            await AgentUsageStore.shared.recordSessionActivity(session)
         }
     }
 
@@ -337,6 +351,7 @@ actor SessionStore {
         sessions[info.sessionId] = session
         Task {
             await TelemetryService.shared.recordSessionDetected(session)
+            await AgentUsageStore.shared.recordSessionActivity(session)
         }
     }
 
@@ -369,6 +384,23 @@ actor SessionStore {
         let sessionId = event.provider == .codex
             ? resolveOrAdoptCodexHookSession(event)
             : event.sessionId
+
+        // When Codex fires a PermissionRequest hook with permission_mode=bypassPermissions,
+        // Codex has already auto-approved the tool call internally (approval_mode "never").
+        // No UI card is needed — respond to the hook immediately so the hook client is
+        // never left waiting on a 24-hour timeout.
+        //
+        // All other PermissionRequest hooks (permission_mode=default etc.) represent
+        // genuine approval requests where Codex is waiting for Island's response.
+        // Fall through to show an approval card.
+        if event.codexBypassPermissions {
+            Self.logger.notice(
+                "Suppressing bypassPermissions hook session=\(sessionId.prefix(8), privacy: .public)"
+            )
+            HookSocketServer.shared.respondToPermissionBySession(sessionId: sessionId, decision: "approve")
+            return
+        }
+
         if shouldIgnoreClaudeAskUserQuestionPermissionRequest(event) {
             Self.logger.notice(
                 "Ignoring duplicate Claude AskUserQuestion permission session=\(sessionId, privacy: .public)"
@@ -510,6 +542,7 @@ actor SessionStore {
             Task {
                 await TelemetryService.shared.recordSessionCompleted(session)
             }
+            await AgentUsageStore.shared.recordHookEvent(event, resolvedSessionID: sessionId)
             return
         }
 
@@ -586,7 +619,9 @@ actor SessionStore {
         }
 
         if let intervention {
-            if session.clientInfo.brand == .qoder, intervention.kind == .question {
+            if shouldQueuePendingQuestionIntervention(intervention, in: session) {
+                enqueuePendingQuestionIntervention(intervention, in: &session)
+            } else if session.clientInfo.brand == .qoder, intervention.kind == .question {
                 session.intervention = mergedQoderQuestionIntervention(
                     current: session.intervention,
                     proposed: intervention
@@ -615,7 +650,7 @@ actor SessionStore {
         } else if shouldPreserveQoderCLIQuestionIntervention {
             session.phase = .waitingForInput
         } else if shouldClearCurrentIntervention {
-            session.intervention = nil
+            clearCurrentIntervention(in: &session, nextPhase: session.phase)
         }
 
         if event.event == "PermissionRequest", let toolUseId = event.toolUseId {
@@ -657,6 +692,8 @@ actor SessionStore {
         updateQoderConversationPoll(for: session, event: event)
         updateOpenClawConversationPoll(for: session, event: event)
         updateCodeBuddyCLIQuestionPoll(for: session, event: event)
+
+        await AgentUsageStore.shared.recordHookEvent(event, resolvedSessionID: sessionId)
 
         if event.shouldSyncFile {
             scheduleFileSync(
@@ -1141,6 +1178,105 @@ actor SessionStore {
         }
     }
 
+    private nonisolated func shouldQueuePendingQuestionIntervention(
+        _ intervention: SessionIntervention,
+        in session: SessionState
+    ) -> Bool {
+        intervention.kind == .question
+            && intervention.supportsInlineResponse
+            && session.clientInfo.kind == .claudeCode
+    }
+
+    private func enqueuePendingQuestionIntervention(
+        _ intervention: SessionIntervention,
+        in session: inout SessionState
+    ) {
+        if let current = session.intervention,
+           shouldQueuePendingQuestionIntervention(current, in: session),
+           !session.pendingInterventions.contains(where: { interventionsMatch($0, current) }) {
+            session.pendingInterventions.insert(current, at: 0)
+        }
+
+        if let index = session.pendingInterventions.firstIndex(where: { interventionsMatch($0, intervention) }) {
+            session.pendingInterventions[index] = intervention
+        } else {
+            session.pendingInterventions.append(intervention)
+        }
+
+        if let current = session.intervention,
+           shouldQueuePendingQuestionIntervention(current, in: session),
+           interventionsMatch(current, intervention) {
+            session.intervention = intervention
+            return
+        }
+
+        if let current = session.intervention,
+           shouldQueuePendingQuestionIntervention(current, in: session),
+           session.pendingInterventions.contains(where: { interventionsMatch($0, current) }) {
+            return
+        }
+
+        session.intervention = session.pendingInterventions.first
+    }
+
+    private func clearCurrentIntervention(
+        in session: inout SessionState,
+        nextPhase: SessionPhase
+    ) {
+        if let intervention = session.intervention {
+            removePendingIntervention(intervention, from: &session)
+        }
+
+        if let nextIntervention = session.pendingInterventions.first {
+            session.intervention = nextIntervention
+            if nextIntervention.kind == .question {
+                session.phase = .waitingForInput
+            }
+            return
+        }
+
+        session.intervention = nil
+        if session.phase.canTransition(to: nextPhase) || session.phase == nextPhase {
+            session.phase = nextPhase
+        }
+    }
+
+    private func removePendingIntervention(
+        _ intervention: SessionIntervention,
+        from session: inout SessionState
+    ) {
+        session.pendingInterventions.removeAll { queued in
+            interventionsMatch(queued, intervention)
+        }
+    }
+
+    private nonisolated func interventionsMatch(
+        _ lhs: SessionIntervention,
+        _ rhs: SessionIntervention
+    ) -> Bool {
+        if lhs.id == rhs.id {
+            return true
+        }
+
+        let lhsToolUseIds = Set(pendingHookResponseToolUseIdCandidates(for: lhs))
+        guard !lhsToolUseIds.isEmpty else { return false }
+        let rhsToolUseIds = Set(pendingHookResponseToolUseIdCandidates(for: rhs))
+        return !lhsToolUseIds.isDisjoint(with: rhsToolUseIds)
+    }
+
+    private nonisolated func pendingHookResponseToolUseIdCandidates(for intervention: SessionIntervention) -> [String] {
+        [
+            intervention.metadata["originalToolUseId"],
+            intervention.metadata["toolUseId"],
+            intervention.metadata["tool_use_id"],
+            intervention.id
+        ].compactMap { value -> String? in
+            guard let value else { return nil }
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+    }
+
     private func pendingHookResponse(in session: SessionState) -> PendingHookResponse? {
         if let activePermission = session.activePermission,
            !activePermission.toolUseId.isEmpty {
@@ -1164,19 +1300,8 @@ actor SessionStore {
         )
     }
 
-    private func pendingHookResponseToolUseId(for intervention: SessionIntervention) -> String? {
-        [
-            intervention.metadata["originalToolUseId"],
-            intervention.metadata["toolUseId"],
-            intervention.metadata["tool_use_id"],
-            intervention.id
-        ]
-        .compactMap { value -> String? in
-            guard let value else { return nil }
-            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : trimmed
-        }
-        .first
+    private nonisolated func pendingHookResponseToolUseId(for intervention: SessionIntervention) -> String? {
+        pendingHookResponseToolUseIdCandidates(for: intervention).first
     }
 
     private func cancelOrphanedPendingHookResponse(
@@ -1213,10 +1338,19 @@ actor SessionStore {
         guard let intervention = session.intervention,
               intervention.kind == pending.kind,
               intervention.supportsInlineResponse else {
-            return false
+            return session.pendingInterventions.contains { intervention in
+                intervention.kind == pending.kind
+                    && intervention.supportsInlineResponse
+                    && intervention.matchesResolvedToolUseId(pending.toolUseId)
+            }
         }
 
         return intervention.matchesResolvedToolUseId(pending.toolUseId)
+            || session.pendingInterventions.contains { intervention in
+                intervention.kind == pending.kind
+                    && intervention.supportsInlineResponse
+                    && intervention.matchesResolvedToolUseId(pending.toolUseId)
+            }
     }
 
     private func processSubagentTracking(event: HookEvent, session: inout SessionState) {
@@ -1257,6 +1391,9 @@ actor SessionStore {
         guard var session = sessions[sessionId] else { return }
         session.subagentState.addSubagentTool(tool)
         sessions[sessionId] = session
+        Task {
+            await AgentUsageStore.shared.recordSubagentTool(sessionID: sessionId, tool: tool)
+        }
     }
 
     /// Handle subagent tool completed event
@@ -1472,7 +1609,8 @@ actor SessionStore {
         if let existingItem = session.chatItems.first(where: { $0.id == toolUseId }),
            case .toolCall(let tool) = existingItem.type,
            tool.status == .success || tool.status == .error || tool.status == .interrupted {
-            // Already completed, skip
+            _ = clearResolvedToolCompletionIntervention(in: &session, toolUseId: toolUseId)
+            sessions[sessionId] = session
             return
         }
 
@@ -1518,7 +1656,7 @@ actor SessionStore {
             session.completedErrorToolIDs.insert(toolUseId)
         }
 
-        clearResolvedApprovalIntervention(in: &session, toolUseId: toolUseId)
+        _ = clearResolvedToolCompletionIntervention(in: &session, toolUseId: toolUseId)
         sessions[sessionId] = session
     }
 
@@ -1530,6 +1668,26 @@ actor SessionStore {
         }
 
         session.intervention = nil
+    }
+
+    @discardableResult
+    private func clearResolvedToolCompletionIntervention(in session: inout SessionState, toolUseId: String) -> Bool {
+        guard let intervention = session.intervention,
+              intervention.matchesResolvedToolUseId(toolUseId) else {
+            return false
+        }
+
+        switch intervention.kind {
+        case .approval:
+            session.intervention = nil
+            return true
+        case .question:
+            session.intervention = nil
+            if session.phase == .waitingForInput {
+                session.phase = .processing
+            }
+            return true
+        }
     }
 
     /// Find the next tool waiting for approval (excluding a specific tool ID)
@@ -1620,16 +1778,14 @@ actor SessionStore {
         guard var session = sessions[sessionId] else { return }
         if let intervention = session.intervention,
            shouldAwaitExternalContinuationAfterResolving(intervention, in: session) {
+            removePendingIntervention(intervention, from: &session)
             session.intervention = intervention.markingAwaitingExternalContinuation(
                 actorName: session.interactionDisplayName,
                 selectedAnswers: submittedAnswers
             )
             session.phase = .waitingForInput
         } else {
-            session.intervention = nil
-            if session.phase.canTransition(to: nextPhase) || session.phase == nextPhase {
-                session.phase = nextPhase
-            }
+            clearCurrentIntervention(in: &session, nextPhase: nextPhase)
         }
         session.lastActivity = Date()
         sessions[sessionId] = session
@@ -1819,6 +1975,8 @@ actor SessionStore {
         sessions[payload.sessionId] = session
         publishState()
 
+        await AgentUsageStore.shared.recordFileUpdate(session: session, payload: payload)
+
         await emitToolCompletionEvents(
             sessionId: payload.sessionId,
             session: session,
@@ -1884,6 +2042,10 @@ actor SessionStore {
     ) -> Bool {
         guard session.phase.isActive else { return false }
         guard incomingPhase == .idle else { return false }
+        if session.provider == .codex {
+            // Codex rollout/app-server idle describes a quiet turn, not a finished client session.
+            return true
+        }
         return sessionHasLiveExecutionEvidence(session)
     }
 
@@ -1991,11 +2153,16 @@ actor SessionStore {
         toolResults: [String: ConversationParser.ToolResult],
         structuredResults: [String: ToolResultData]
     ) async {
+        var emittedToolIds: Set<String> = []
+
         for item in session.chatItems {
             guard case .toolCall(let tool) = item.type else { continue }
 
-            // Only emit for tools that are running or waiting but have results in JSONL
-            guard tool.status == .running || tool.status == .waitingForApproval else { continue }
+            // Emit for pending tools, plus stale interventions whose tool item
+            // already looks complete but still needs UI cleanup.
+            let isPendingTool = tool.status == .running || tool.status == .waitingForApproval
+            let matchesCurrentIntervention = session.intervention?.matchesResolvedToolUseId(item.id) == true
+            guard isPendingTool || matchesCurrentIntervention else { continue }
             guard completedToolIds.contains(item.id) else { continue }
 
             let result = ToolCompletionResult.from(
@@ -2004,7 +2171,18 @@ actor SessionStore {
             )
 
             // Process the completion event (this will update state and phase consistently)
+            emittedToolIds.insert(item.id)
             await process(.toolCompleted(sessionId: sessionId, toolUseId: item.id, result: result))
+        }
+
+        guard let intervention = session.intervention else { return }
+        for toolUseId in completedToolIds where !emittedToolIds.contains(toolUseId) {
+            guard intervention.matchesResolvedToolUseId(toolUseId) else { continue }
+            let result = ToolCompletionResult.from(
+                parserResult: toolResults[toolUseId],
+                structuredResult: structuredResults[toolUseId]
+            )
+            await process(.toolCompleted(sessionId: sessionId, toolUseId: toolUseId, result: result))
         }
     }
 
@@ -2412,9 +2590,62 @@ actor SessionStore {
         let wasAlreadyEnded = session.phase == .ended
         session.phase = .ended
         session.intervention = nil
+        session.pendingInterventions.removeAll()
         session.autoApprovePermissions = false
         if !wasAlreadyEnded {
             session.lastActivity = Date()
+        }
+    }
+
+    // MARK: - Liveness Sweep
+
+    /// Start the periodic sweep that removes sessions whose process is no
+    /// longer alive and garbage-collects `.ended` sessions. Idempotent.
+    /// Wired from `SessionMonitor.startMonitoring()`.
+    func startLivenessSweep() {
+        guard livenessSweepTask == nil else { return }
+        let intervalNs = livenessSweepIntervalNs
+        livenessSweepTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: intervalNs)
+                guard !Task.isCancelled else { break }
+                await self?.sweepDeadOrEndedSessions()
+            }
+        }
+    }
+
+    /// Stop the periodic liveness sweep. Wired from
+    /// `SessionMonitor.stopMonitoring()`.
+    func stopLivenessSweep() {
+        livenessSweepTask?.cancel()
+        livenessSweepTask = nil
+    }
+
+    /// Remove sessions in `.ended` phase, plus sessions whose tracked `pid`
+    /// is confirmed dead via `kill(pid, 0)`. Sessions without a `pid` are
+    /// left alone (we cannot assert they are dead). Per-session pending
+    /// tasks are cancelled to avoid orphan work.
+    func sweepDeadOrEndedSessions() {
+        var removedAny = false
+        for (sessionId, session) in Array(sessions) {
+            let endedReap = session.phase == .ended
+            let pidIsDead: Bool = {
+                guard let pid = session.pid, pid > 0 else { return false }
+                return Darwin.kill(pid_t(pid), 0) != 0 && errno == ESRCH
+            }()
+            guard endedReap || pidIsDead else { continue }
+
+            sessions.removeValue(forKey: sessionId)
+            clearCodexSessionAliases(for: sessionId)
+            cancelPendingSync(sessionId: sessionId)
+            cancelPendingCodexPlaceholderPrune(sessionId: sessionId)
+            cancelPendingQoderConversationPoll(sessionId: sessionId)
+            cancelPendingOpenClawConversationPoll(sessionId: sessionId)
+            cancelPendingCodeBuddyCLIQuestionPoll(sessionId: sessionId)
+            removedAny = true
+        }
+        if removedAny {
+            publishState()
         }
     }
 
@@ -2515,6 +2746,18 @@ actor SessionStore {
         await refreshQoderFallbackSubagentPresentation(for: sessionId, session: &session)
 
         sessions[sessionId] = session
+        await AgentUsageStore.shared.recordFileUpdate(
+            session: session,
+            payload: FileUpdatePayload(
+                sessionId: sessionId,
+                cwd: session.cwd,
+                messages: messages,
+                isIncremental: false,
+                completedToolIds: completedTools,
+                toolResults: toolResults,
+                structuredResults: structuredResults
+            )
+        )
     }
 
     // MARK: - File Sync Scheduling
@@ -2539,7 +2782,12 @@ actor SessionStore {
                 await self?.process(.clearDetected(sessionId: sessionId))
             }
 
-            guard !result.newMessages.isEmpty || result.clearDetected else {
+            let hasPendingCompletedToolResult = await self?.hasPendingCompletedToolResult(
+                sessionId: sessionId,
+                completedToolIds: result.completedToolIds
+            ) ?? false
+
+            guard !result.newMessages.isEmpty || result.clearDetected || hasPendingCompletedToolResult else {
                 return
             }
 
@@ -2554,6 +2802,26 @@ actor SessionStore {
             )
 
             await self?.process(.fileUpdated(payload))
+        }
+    }
+
+    private func hasPendingCompletedToolResult(sessionId: String, completedToolIds: Set<String>) -> Bool {
+        guard !completedToolIds.isEmpty,
+              let session = sessions[sessionId] else {
+            return false
+        }
+
+        if let intervention = session.intervention,
+           completedToolIds.contains(where: { intervention.matchesResolvedToolUseId($0) }) {
+            return true
+        }
+
+        return session.chatItems.contains { item in
+            guard completedToolIds.contains(item.id),
+                  case .toolCall(let tool) = item.type else {
+                return false
+            }
+            return tool.status == .running || tool.status == .waitingForApproval
         }
     }
 
@@ -2846,11 +3114,21 @@ actor SessionStore {
                 // or the thread hasn't been materialized there yet.
             }
 
-            guard let snapshot = await CodexRolloutParser.shared.parseThread(
+            guard await self?.reserveCodexRolloutParseIfNeeded(
+                sessionId: sessionId,
+                hasAppServerSnapshot: appServerSnapshot != nil
+            ) == true else {
+                return
+            }
+
+            let snapshot = await CodexRolloutParser.shared.parseThread(
                 threadId: sessionId,
                 fallbackCwd: cwd,
                 clientInfo: clientInfo
-            ) else {
+            )
+            await self?.finishCodexRolloutParse(sessionId: sessionId)
+
+            guard let snapshot else {
                 return
             }
 
@@ -2863,6 +3141,33 @@ actor SessionStore {
 
             await self?.syncCodexThreadSnapshot(snapshot, ingress: .hookBridge)
         }
+    }
+
+    private func reserveCodexRolloutParseIfNeeded(
+        sessionId: String,
+        hasAppServerSnapshot: Bool
+    ) -> Bool {
+        guard !codexRolloutParsesInFlight.contains(sessionId) else {
+            return false
+        }
+
+        let now = Date()
+        let interval = hasAppServerSnapshot
+            ? codexRolloutParseWithAppServerInterval
+            : codexRolloutParseFallbackInterval
+
+        if let lastParseAt = lastCodexRolloutParseAt[sessionId],
+           now.timeIntervalSince(lastParseAt) < interval {
+            return false
+        }
+
+        codexRolloutParsesInFlight.insert(sessionId)
+        return true
+    }
+
+    private func finishCodexRolloutParse(sessionId: String) {
+        codexRolloutParsesInFlight.remove(sessionId)
+        lastCodexRolloutParseAt[sessionId] = Date()
     }
 
     // MARK: - State Publishing
@@ -2889,6 +3194,8 @@ actor SessionStore {
             scheduleAssociationSave()
         }
 
+        guard sortedSessions != lastPublishedSessions else { return }
+        lastPublishedSessions = sortedSessions
         sessionsSubject.send(sortedSessions)
     }
 
@@ -3132,6 +3439,21 @@ actor SessionStore {
         sessions[resolvedSessionId] = session
         publishState()
         updateCodexPlaceholderPrune(for: session)
+
+        // Start file watcher for Codex sessions discovered via App Server
+        // (Hook-based sessions already get watchers via SessionMonitor.processHookEvent)
+        if session.phase == .processing || session.phase == .waitingForInput || session.phase.isWaitingForApproval {
+            let watcherSessionId = resolvedSessionId
+            let watcherCwd = session.cwd
+            let watcherFilePath = session.clientInfo.sessionFilePath
+            Task { @MainActor in
+                InterruptWatcherManager.shared.startWatching(
+                    sessionId: watcherSessionId,
+                    cwd: watcherCwd,
+                    explicitFilePath: watcherFilePath
+                )
+            }
+        }
     }
 
     func updateCodexThreadName(sessionId: String, name: String?) {
@@ -3208,7 +3530,7 @@ actor SessionStore {
         session.codexSubagentDepth = snapshot.subagentDepth
         session.codexSubagentNickname = snapshot.subagentNickname
         session.codexSubagentRole = snapshot.subagentRole
-        let shouldPreserveExternalIntervention = shouldPreserveExternalCodexIntervention(
+        let shouldPreserveExternalIntervention = !snapshot.isTurnInterrupted && shouldPreserveExternalCodexIntervention(
             current: session.intervention,
             incoming: snapshot.intervention,
             nextPhase: snapshot.phase,
@@ -3223,6 +3545,8 @@ actor SessionStore {
             } else if !session.phase.needsAttention {
                 session.phase = snapshot.phase
             }
+        } else if snapshot.isTurnInterrupted, snapshot.phase == .idle {
+            session.phase = .idle
         } else if shouldPreserveActivePhaseDuringApparentIdle(
             session: session,
             incomingPhase: snapshot.phase,
@@ -3279,6 +3603,21 @@ actor SessionStore {
         sessions[resolvedSessionId] = session
         publishState()
         updateCodexPlaceholderPrune(for: session)
+
+        // Start file watcher for Codex sessions discovered via App Server
+        if ingress != .hookBridge,
+           session.phase == .processing || session.phase == .waitingForInput || session.phase.isWaitingForApproval {
+            let watcherSessionId = resolvedSessionId
+            let watcherCwd = session.cwd
+            let watcherFilePath = session.clientInfo.sessionFilePath
+            Task { @MainActor in
+                InterruptWatcherManager.shared.startWatching(
+                    sessionId: watcherSessionId,
+                    cwd: watcherCwd,
+                    explicitFilePath: watcherFilePath
+                )
+            }
+        }
     }
 
     private func shouldPreserveExternalCodexIntervention(
@@ -3847,6 +4186,8 @@ actor SessionStore {
     }
 
     private func clearCodexSessionAliases(for sessionId: String) {
+        lastCodexRolloutParseAt.removeValue(forKey: sessionId)
+        codexRolloutParsesInFlight.remove(sessionId)
         codexSessionAliases.removeValue(forKey: sessionId)
         codexSessionAliases = codexSessionAliases.filter { $0.value != sessionId }
     }
@@ -3994,6 +4335,7 @@ actor SessionStore {
             previewText: previousSession.previewText,
             latestHookMessage: previousSession.latestHookMessage,
             intervention: previousSession.intervention,
+            pendingInterventions: previousSession.pendingInterventions,
             codexParentThreadId: previousSession.codexParentThreadId,
             codexSubagentDepth: previousSession.codexSubagentDepth,
             codexSubagentNickname: previousSession.codexSubagentNickname,

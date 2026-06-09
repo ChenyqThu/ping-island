@@ -101,6 +101,14 @@ class SessionMonitor: ObservableObject {
             startEnergyAwareMaintenanceLoop()
         }
 
+        // Periodic liveness sweep: removes sessions whose Claude process has
+        // died without delivering SessionEnd, plus garbage-collects sessions
+        // already in .ended phase. See SessionStore.startLivenessSweep for
+        // details.
+        Task {
+            await SessionStore.shared.startLivenessSweep()
+        }
+
         let handleHookEvent: @Sendable (HookEvent) -> Void = { [self] event in
             Task { @MainActor in
                 await self.handleIncomingHookEvent(event)
@@ -241,6 +249,9 @@ class SessionMonitor: ObservableObject {
         maintenanceTask = nil
         usageRefreshTask?.cancel()
         usageRefreshTask = nil
+        Task {
+            await SessionStore.shared.stopLivenessSweep()
+        }
         HookSocketServer.shared.stop()
         RemoteConnectorManager.shared.stop()
         Task {
@@ -274,6 +285,7 @@ class SessionMonitor: ObservableObject {
                     guard let self else { return }
                     self.refreshVisibleSessions()
                     if self.shouldRefreshUsage,
+                       AppSettings.showUsage,
                        EnergyGovernor.shared.policy.usageRefreshInterval != nil {
                         self.refreshUsageState()
                     }
@@ -288,6 +300,12 @@ class SessionMonitor: ObservableObject {
     }
 
     func refreshUsageState() {
+        guard AppSettings.showUsage else {
+            usageRefreshTask?.cancel()
+            usageRefreshTask = nil
+            return
+        }
+
         usageRefreshTask?.cancel()
         usageRefreshTask = Task { [weak self] in
             guard let self else { return }
@@ -310,6 +328,7 @@ class SessionMonitor: ObservableObject {
             }
             if let codexSnapshot {
                 UsageSnapshotCacheStore.saveCodex(codexSnapshot)
+                await AgentUsageStore.shared.recordCodexUsageSnapshot(codexSnapshot)
             }
 
             self.claudeUsageSnapshot = claudeSnapshot ?? cachedClaudeSnapshot
@@ -352,6 +371,12 @@ class SessionMonitor: ObservableObject {
             guard let session = await SessionStore.shared.session(for: sessionId) else {
                 return
             }
+            let permission = Self.approvalToolUseId(for: session)
+            await clearApprovalNotification(
+                for: session,
+                toolUseId: permission,
+                decision: .approve
+            )
 
             if session.ingress == .nativeRuntime {
                 try? await runtimeCoordinator.approveSession(
@@ -379,7 +404,7 @@ class SessionMonitor: ObservableObject {
                 return
             }
 
-            guard let permission = session.activePermission else { return }
+            guard let permission else { return }
 
             if forSession, session.scopedApprovalAction == .autoApprove {
                 await SessionStore.shared.process(
@@ -387,37 +412,31 @@ class SessionMonitor: ObservableObject {
                 )
                 if session.ingress == .remoteBridge {
                     RemoteConnectorManager.shared.respondToPermission(
-                        toolUseId: permission.toolUseId,
+                        toolUseId: permission,
                         decision: "approveForSession"
                     )
                 } else {
                     HookSocketServer.shared.respondToPermission(
-                        toolUseId: permission.toolUseId,
+                        toolUseId: permission,
                         decision: "approveForSession"
                     )
                 }
-                await SessionStore.shared.process(
-                    .permissionApproved(sessionId: sessionId, toolUseId: permission.toolUseId)
-                )
                 await TelemetryService.shared.recordAttentionResolved(session, resolution: "approve_for_session")
                 return
             }
 
             if session.ingress == .remoteBridge {
                 RemoteConnectorManager.shared.respondToPermission(
-                    toolUseId: permission.toolUseId,
+                    toolUseId: permission,
                     decision: "allow"
                 )
             } else {
                 HookSocketServer.shared.respondToPermission(
-                    toolUseId: permission.toolUseId,
+                    toolUseId: permission,
                     decision: "allow"
                 )
             }
 
-            await SessionStore.shared.process(
-                .permissionApproved(sessionId: sessionId, toolUseId: permission.toolUseId)
-            )
             await TelemetryService.shared.recordAttentionResolved(session, resolution: "approve")
         }
     }
@@ -427,6 +446,12 @@ class SessionMonitor: ObservableObject {
             guard let session = await SessionStore.shared.session(for: sessionId) else {
                 return
             }
+            let permission = Self.approvalToolUseId(for: session)
+            await clearApprovalNotification(
+                for: session,
+                toolUseId: permission,
+                decision: .deny(reason: reason)
+            )
 
             if session.ingress == .nativeRuntime {
                 try? await runtimeCoordinator.denySession(
@@ -448,26 +473,78 @@ class SessionMonitor: ObservableObject {
                 return
             }
 
-            guard let permission = session.activePermission else { return }
+            guard let permission else { return }
 
             if session.ingress == .remoteBridge {
                 RemoteConnectorManager.shared.respondToPermission(
-                    toolUseId: permission.toolUseId,
+                    toolUseId: permission,
                     decision: "deny",
                     reason: reason
                 )
             } else {
                 HookSocketServer.shared.respondToPermission(
-                    toolUseId: permission.toolUseId,
+                    toolUseId: permission,
                     decision: "deny",
                     reason: reason
                 )
             }
 
-            await SessionStore.shared.process(
-                .permissionDenied(sessionId: sessionId, toolUseId: permission.toolUseId, reason: reason)
-            )
             await TelemetryService.shared.recordAttentionResolved(session, resolution: "deny")
+        }
+    }
+
+    private enum ApprovalDecision {
+        case approve
+        case deny(reason: String?)
+    }
+
+    private nonisolated static func approvalToolUseId(for session: SessionState) -> String? {
+        if let toolUseId = session.activePermission?.toolUseId,
+           !toolUseId.isEmpty {
+            return toolUseId
+        }
+
+        guard let intervention = session.intervention,
+              intervention.kind == .approval else {
+            return nil
+        }
+
+        return [
+            intervention.metadata["originalToolUseId"],
+            intervention.metadata["toolUseId"],
+            intervention.metadata["tool_use_id"],
+            intervention.id
+        ].compactMap { candidate -> String? in
+            guard let candidate else { return nil }
+            let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }.first
+    }
+
+    private func clearApprovalNotification(
+        for session: SessionState,
+        toolUseId: String?,
+        decision: ApprovalDecision
+    ) async {
+        guard session.needsApprovalResponse else { return }
+
+        guard let toolUseId else {
+            await SessionStore.shared.resolveCodexIntervention(
+                sessionId: session.sessionId,
+                nextPhase: .processing
+            )
+            return
+        }
+
+        switch decision {
+        case .approve:
+            await SessionStore.shared.process(
+                .permissionApproved(sessionId: session.sessionId, toolUseId: toolUseId)
+            )
+        case .deny(let reason):
+            await SessionStore.shared.process(
+                .permissionDenied(sessionId: session.sessionId, toolUseId: toolUseId, reason: reason)
+            )
         }
     }
 
@@ -721,6 +798,7 @@ class SessionMonitor: ObservableObject {
     // MARK: - State Update
 
     private func updateFromSessions(_ sessions: [SessionState]) {
+        guard sessions != allSessions else { return }
         allSessions = sessions
         refreshVisibleSessions()
     }
@@ -729,8 +807,12 @@ class SessionMonitor: ObservableObject {
         let visibleSessions = filteredVisibleSessions(from: allSessions)
         let pendingSessions = visibleSessions.filter { $0.needsAttention }
         recordNewAttentionRequests(in: pendingSessions)
-        instances = visibleSessions
-        pendingInstances = pendingSessions
+        if visibleSessions != instances {
+            instances = visibleSessions
+        }
+        if pendingSessions != pendingInstances {
+            pendingInstances = pendingSessions
+        }
     }
 
     private func recordNewAttentionRequests(in pendingSessions: [SessionState]) {
@@ -1088,7 +1170,7 @@ class SessionMonitor: ObservableObject {
 
         return session.autoApprovePermissions
             && session.provider == .claude
-            && session.clientInfo.kind == .claudeCode
+            && (session.clientInfo.kind == .claudeCode || session.clientInfo.isQwenCodeClient)
     }
 
     private nonisolated static func resolvePendingApprovalToolUseId(

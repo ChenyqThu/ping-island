@@ -20,7 +20,43 @@ struct CodexUsageSnapshot: Equatable, Codable, Sendable {
     let capturedAt: Date?
     let planType: String?
     let limitID: String?
+    let tokenUsage: CodexTokenUsage?
     let windows: [CodexUsageWindow]
+
+    nonisolated init(
+        sourceFilePath: String,
+        capturedAt: Date?,
+        planType: String?,
+        limitID: String?,
+        tokenUsage: CodexTokenUsage? = nil,
+        windows: [CodexUsageWindow]
+    ) {
+        self.sourceFilePath = sourceFilePath
+        self.capturedAt = capturedAt
+        self.planType = planType
+        self.limitID = limitID
+        self.tokenUsage = tokenUsage
+        self.windows = windows
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sourceFilePath
+        case capturedAt
+        case planType
+        case limitID
+        case tokenUsage
+        case windows
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        sourceFilePath = try container.decode(String.self, forKey: .sourceFilePath)
+        capturedAt = try container.decodeIfPresent(Date.self, forKey: .capturedAt)
+        planType = try container.decodeIfPresent(String.self, forKey: .planType)
+        limitID = try container.decodeIfPresent(String.self, forKey: .limitID)
+        tokenUsage = try container.decodeIfPresent(CodexTokenUsage.self, forKey: .tokenUsage)
+        windows = try container.decode([CodexUsageWindow].self, forKey: .windows)
+    }
 
     nonisolated var threadID: String? {
         let stem = URL(fileURLWithPath: sourceFilePath).deletingPathExtension().lastPathComponent
@@ -40,19 +76,32 @@ enum CodexUsageLoader {
     nonisolated static let defaultRootURL = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".codex/sessions", isDirectory: true)
 
+    private nonisolated static let defaultCandidateScanLimit = 24
+    private nonisolated static let defaultMaxBytesPerFile = 4 * 1024 * 1024
+    private nonisolated static let cacheLock = NSLock()
+    nonisolated(unsafe) private static var cachedResult: CachedResult?
+
     private struct Candidate {
         let fileURL: URL
         let modifiedAt: Date
+        let fileSize: UInt64
+    }
+
+    private struct CachedResult {
+        let fingerprint: String
+        let snapshot: CodexUsageSnapshot?
     }
 
     nonisolated static func load(
         fromRootURL rootURL: URL = defaultRootURL,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        candidateScanLimit: Int = defaultCandidateScanLimit,
+        maxBytesPerFile: Int = defaultMaxBytesPerFile
     ) throws -> CodexUsageSnapshot? {
         guard fileManager.fileExists(atPath: rootURL.path),
               let enumerator = fileManager.enumerator(
                 at: rootURL,
-                includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
+                includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey, .isRegularFileKey],
                 options: [.skipsHiddenFiles]
               ) else {
             return nil
@@ -63,7 +112,7 @@ enum CodexUsageLoader {
             guard fileURL.lastPathComponent.hasPrefix("rollout-"),
                   fileURL.pathExtension == "jsonl",
                   let resourceValues = try? fileURL.resourceValues(
-                    forKeys: [.contentModificationDateKey, .isRegularFileKey]
+                    forKeys: [.contentModificationDateKey, .fileSizeKey, .isRegularFileKey]
                   ),
                   resourceValues.isRegularFile == true else {
                 continue
@@ -72,7 +121,8 @@ enum CodexUsageLoader {
             candidates.append(
                 Candidate(
                     fileURL: fileURL,
-                    modifiedAt: resourceValues.contentModificationDate ?? .distantPast
+                    modifiedAt: resourceValues.contentModificationDate ?? .distantPast,
+                    fileSize: UInt64(max(0, resourceValues.fileSize ?? 0))
                 )
             )
         }
@@ -84,11 +134,27 @@ enum CodexUsageLoader {
             return lhs.modifiedAt > rhs.modifiedAt
         }
 
+        let limitedCandidates = Array(sortedCandidates.prefix(max(1, candidateScanLimit)))
+        let fingerprint = cacheFingerprint(
+            rootURL: rootURL,
+            candidates: limitedCandidates,
+            candidateScanLimit: candidateScanLimit,
+            maxBytesPerFile: maxBytesPerFile
+        )
+        if let cached = cachedSnapshot(for: fingerprint) {
+            return cached
+        }
+
         var bestSnapshot: CodexUsageSnapshot?
         var bestCapturedAt: Date = .distantPast
 
-        for candidate in sortedCandidates {
-            guard let snapshot = loadLatestSnapshot(from: candidate.fileURL, modifiedAt: candidate.modifiedAt) else {
+        for candidate in limitedCandidates {
+            guard let snapshot = loadLatestSnapshot(
+                from: candidate.fileURL,
+                modifiedAt: candidate.modifiedAt,
+                fileSize: candidate.fileSize,
+                maxBytes: maxBytesPerFile
+            ) else {
                 continue
             }
             let capturedAt = snapshot.capturedAt ?? candidate.modifiedAt
@@ -98,22 +164,91 @@ enum CodexUsageLoader {
             }
         }
 
+        cache(snapshot: bestSnapshot, for: fingerprint)
         return bestSnapshot
     }
 
-    private nonisolated static func loadLatestSnapshot(from fileURL: URL, modifiedAt: Date) -> CodexUsageSnapshot? {
-        guard let contents = try? String(contentsOf: fileURL, encoding: .utf8) else {
+    private nonisolated static func loadLatestSnapshot(
+        from fileURL: URL,
+        modifiedAt: Date,
+        fileSize: UInt64,
+        maxBytes: Int
+    ) -> CodexUsageSnapshot? {
+        guard fileSize > 0,
+              maxBytes > 0,
+              let contents = readSuffixText(from: fileURL, fileSize: fileSize, maxBytes: maxBytes) else {
             return nil
         }
 
-        var latestSnapshot: CodexUsageSnapshot?
-        contents.enumerateLines { line, _ in
-            guard let snapshot = snapshot(from: line, filePath: fileURL.path, fallbackTimestamp: modifiedAt) else {
-                return
+        for line in contents.split(separator: "\n", omittingEmptySubsequences: false).reversed() {
+            if line.contains("\"token_count\""),
+               line.contains("\"rate_limits\""),
+               let snapshot = snapshot(from: String(line), filePath: fileURL.path, fallbackTimestamp: modifiedAt) {
+                return snapshot
             }
-            latestSnapshot = snapshot
         }
-        return latestSnapshot
+        return nil
+    }
+
+    private nonisolated static func readSuffixText(from fileURL: URL, fileSize: UInt64, maxBytes: Int) -> String? {
+        guard let handle = try? FileHandle(forReadingFrom: fileURL) else {
+            return nil
+        }
+        defer { try? handle.close() }
+
+        let readSize = min(fileSize, UInt64(maxBytes))
+        let offset = fileSize - readSize
+        do {
+            try handle.seek(toOffset: offset)
+            guard let data = try handle.read(upToCount: Int(readSize)) else {
+                return nil
+            }
+
+            var text = String(decoding: data, as: UTF8.self)
+            if offset > 0, let newlineIndex = text.firstIndex(of: "\n") {
+                text = String(text[text.index(after: newlineIndex)...])
+            }
+            return text
+        } catch {
+            return nil
+        }
+    }
+
+    private nonisolated static func cachedSnapshot(for fingerprint: String) -> CodexUsageSnapshot?? {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        guard let cachedResult, cachedResult.fingerprint == fingerprint else {
+            return nil
+        }
+        return cachedResult.snapshot
+    }
+
+    private nonisolated static func cache(snapshot: CodexUsageSnapshot?, for fingerprint: String) {
+        cacheLock.lock()
+        cachedResult = CachedResult(fingerprint: fingerprint, snapshot: snapshot)
+        cacheLock.unlock()
+    }
+
+    private nonisolated static func cacheFingerprint(
+        rootURL: URL,
+        candidates: [Candidate],
+        candidateScanLimit: Int,
+        maxBytesPerFile: Int
+    ) -> String {
+        var parts = [
+            rootURL.resolvingSymlinksInPath().path,
+            "limit=\(candidateScanLimit)",
+            "bytes=\(maxBytesPerFile)"
+        ]
+        parts.reserveCapacity(candidates.count + 1)
+        for candidate in candidates {
+            parts.append([
+                candidate.fileURL.resolvingSymlinksInPath().path,
+                String(candidate.modifiedAt.timeIntervalSinceReferenceDate),
+                String(candidate.fileSize)
+            ].joined(separator: "|"))
+        }
+        return parts.joined(separator: "\n")
     }
 
     private nonisolated static func snapshot(from line: String, filePath: String, fallbackTimestamp: Date) -> CodexUsageSnapshot? {
@@ -140,6 +275,7 @@ enum CodexUsageLoader {
             capturedAt: timestamp(from: object["timestamp"]) ?? fallbackTimestamp,
             planType: string(from: rateLimits["plan_type"]),
             limitID: string(from: rateLimits["limit_id"]),
+            tokenUsage: tokenUsage(from: payload["info"]),
             windows: windows
         )
     }
@@ -250,5 +386,37 @@ enum CodexUsageLoader {
         default:
             return nil
         }
+    }
+
+    private nonisolated static func tokenUsage(from value: Any?) -> CodexTokenUsage? {
+        let usage: [String: Any]?
+        if let info = value as? [String: Any] {
+            usage = info["total_token_usage"] as? [String: Any]
+        } else {
+            usage = nil
+        }
+
+        guard let usage else {
+            return nil
+        }
+
+        let inputTokens = integer(from: usage["input_tokens"])
+            ?? integer(from: usage["prompt_tokens"])
+            ?? 0
+        let outputTokens = integer(from: usage["output_tokens"])
+            ?? integer(from: usage["completion_tokens"])
+            ?? 0
+        let totalTokens = integer(from: usage["total_tokens"])
+            ?? max(0, inputTokens + outputTokens)
+
+        guard inputTokens > 0 || outputTokens > 0 || totalTokens > 0 else {
+            return nil
+        }
+
+        return CodexTokenUsage(
+            inputTokens: inputTokens,
+            outputTokens: outputTokens,
+            totalTokens: totalTokens
+        )
     }
 }

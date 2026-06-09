@@ -65,6 +65,10 @@ final class UpdateManager: ObservableObject {
         false
     }
 
+    var canInstallPendingUpdateNow: Bool {
+        false
+    }
+
     var releaseNotesActionTitle: String {
         "版本历史由 App Store 管理"
     }
@@ -148,6 +152,10 @@ final class UpdateManager: NSObject, ObservableObject {
 
     var canShowReleaseNotes: Bool {
         latestReleaseNotes != nil || latestAppcastItem != nil
+    }
+
+    var canInstallPendingUpdateNow: Bool {
+        pendingSilentInstall != nil
     }
 
     var releaseNotesActionTitle: String {

@@ -5,10 +5,10 @@
 <p align="center">
   <b>AI coding session monitor for the macOS menu bar</b><br>
   <a href="https://erha19.github.io/">Website</a> •
+  <a href="#lets-try-it">Try it</a> •
   <a href="#installation">Install</a> •
   <a href="#features">Features</a> •
-  <a href="#buddy-detach">Buddy Detach</a> •
-  <a href="#supported-tools">Supported Tools</a> •
+  <a href="#supported-clients">Supported Clients</a> •
   <a href="#build-from-source">Build</a> •
   <a href="#contributors">Contributors</a> •
   <a href="docs/privacy-policy.md">Privacy</a><br>
@@ -46,6 +46,7 @@
   <img src="docs/images/mascots/codex.gif" width="36" alt="Codex mascot" title="Codex">&nbsp;
   <img src="docs/images/mascots/gemini.gif" width="36" alt="Gemini CLI mascot" title="Gemini CLI">&nbsp;
   <img src="docs/images/mascots/hermes.gif" width="36" alt="Hermes Agent mascot" title="Hermes Agent">&nbsp;
+  <img src="docs/images/mascots/pi.gif" width="36" alt="Pi Agent mascot" title="Pi Agent">&nbsp;
   <img src="docs/images/mascots/qwen.gif" width="36" alt="Qwen Code mascot" title="Qwen Code">&nbsp;
   <img src="docs/images/mascots/kimi.gif" width="36" alt="Kimi CLI mascot" title="Kimi CLI">&nbsp;
   <img src="docs/images/mascots/openclaw.gif" width="36" alt="OpenClaw mascot" title="OpenClaw">&nbsp;
@@ -56,73 +57,23 @@
   <img src="docs/images/mascots/copilot.gif" width="36" alt="GitHub Copilot mascot" title="GitHub Copilot">
 </p>
 <p align="center">
-  <sub>Claude Code · Codex · Gemini CLI · Hermes Agent · Qwen Code · Kimi CLI · OpenClaw · OpenCode · Cursor · Qoder · CodeBuddy · GitHub Copilot</sub>
+  <sub>Claude Code · Codex · Gemini CLI · Hermes Agent · Pi Agent · Qwen Code · Kimi CLI · OpenClaw · OpenCode · Cursor · Qoder · CodeBuddy · GitHub Copilot</sub>
 </p>
 
-<a id="buddy-detach"></a>
-## Buddy Detach in v0.5.0+
+<a id="lets-try-it"></a>
+## Let’s try it!
 
-Starting in `v0.5.0` - the first release after `v0.4.0` - Ping Island can detach the active Buddy from the notch. Press and hold the notch, drag the Buddy upward out of the notch area, and it becomes an independent floating companion that stays with you across other windows.
+Detach the active pet from the notch and keep session status nearby while you work across other windows.
 
 <p align="center">
-  <img src="docs/images/ping-island-0.5.0-buddy-detach.png" width="960" alt="Ping Island v0.5.0 Buddy detach poster">
+  <img src="docs/images/demos/ping-island-ask-tool-demo.gif" width="800" alt="Ping Island detached pet interaction demo">
 </p>
 
-- **Three-step interaction** - press and hold, drag outward, then let go to keep the Buddy floating.
-- **Independent floating presence** - keep session awareness visible even when you are no longer watching the top notch.
-- **Free placement with low disruption** - move the Buddy where it helps without pinning it to the menu bar.
-- **Same Island context** - the floating Buddy still represents the same live session, mascot identity, and progress cues.
-
-## What is Ping Island?
-
-Ping Island is a macOS menu bar app that expands into a compact session surface when your coding agents need attention. It listens to Claude-style hooks, Codex hooks, Gemini CLI hooks, Hermes Agent plugin hooks, Qwen Code hooks, Kimi CLI hooks, OpenClaw internal hooks plus session transcripts, the Codex app-server, OpenCode plugins, and compatible IDE integrations so approvals, input requests, completions, and session summaries show up without babysitting terminal tabs.
-
-If you have seen [Vibe Island](https://vibeisland.app/), Ping Island is positioned as an independent open-source alternative in the same category: a native macOS notch/menu bar surface for monitoring and controlling AI coding sessions.
-
-## Features
-
-Ping Island focuses on the moments that actually interrupt coding flow, then keeps them visible and actionable from a native macOS notch surface.
-
-- **Attention-first UI** - Stay compact until a session needs approval, input, review, or intervention.
-- **Act from the notch** - Approve tools, deny requests, and answer follow-up prompts without hunting through tabs.
-- **Claude Code auto-approve** - Turn on per-session auto-approval when you want Claude Code to stop pausing on every permission request.
-- **One-click return** - Jump back to the right iTerm2, Ghostty, Terminal.app, tmux pane, or IDE window.
-- **SSH terminal support** - Bootstrap a remote PingIslandBridge over SSH, rewrite the remote Claude-compatible hooks to point back at your Mac, and keep remote terminal activity visible in the same local Island UI.
-- **Multi-agent coverage** - Track Claude Code, Codex, Gemini CLI, Hermes Agent, Qwen Code, Kimi CLI, OpenClaw, OpenCode, Cursor, Qoder, CodeBuddy, WorkBuddy, GitHub Copilot, and other compatible sessions in one place.
-- **OpenClaw gateway support** - Follow OpenClaw sessions from managed internal hooks, then refill the conversation from OpenClaw's local session transcripts so the Island UI can show the actual back-and-forth instead of a single inbound message.
-- **Codex hook + app-server sync** - Support Codex CLI hooks, live app-server threads, and rollout parsing fallback when needed.
-- **Custom sounds** - Pick per-event macOS sounds or import local sound packs for your own notification style.
-- **Custom agent mascots** - Give each client its own animated mascot override across the notch, session list, and hover UI.
-- **Buddy detach in v0.5.0+** - Drag the active Buddy out of the notch so it can stay nearby as an independent floating companion.
-- **Hermes courier-fox mascot** - Hermes Agent uses a gold courier fox with a winged helmet and satchel so plugin-hook sessions stay visually distinct from the Claude/Qwen family.
-- **Qwen capybara mascot** - Qwen Code now ships with a mint-scarf capybara mascot tuned for prompt, reply, and notification-heavy flows.
-- **Kimi keyboard-orb mascot** - Kimi CLI keeps its original blue keyboard-orb mascot so its hook sessions stay visually distinct in the README strip and app UI.
-
-<a id="supported-tools"></a>
-## Supported Tools
+On notch-screen Macs, Ping Island expands from the notch with session context and action controls when an agent needs attention.
 
 <p align="center">
-  <img src="docs/images/ping-island-mascot-poster.png" width="960" alt="Ping Island supported tools poster">
+  <img src="docs/images/demos/ping-island-question-demo.gif" width="800" alt="Ping Island notch interaction demo">
 </p>
-
-Ping Island also ships VS Code-compatible focus extensions for VS Code, Cursor, CodeBuddy, WorkBuddy, and Qoder. `QoderWork` is hook-only today and does not participate in the IDE extension path.
-
-Qoder IDE and Qoder CLI both store hooks in `~/.qoder/settings.json`, but Ping Island treats them as separate managed integrations because their hook behavior is not identical. On launch, Ping Island checks `qodercli -v`; when the local CLI is newer than 0.2.5, it refreshes only the Qoder CLI managed entries while preserving Qoder IDE hooks and unrelated JSON settings. New Qoder CLI follows Claude Code-compatible blocking hooks and response payloads, while Qoder IDE and `QoderWork` stay notify-only so Ping Island does not submit answers or approvals back into those clients.
-
-CodeBuddy IDE and CodeBuddy CLI both use `~/.codebuddy/settings.json`, but Ping Island manages them as separate hook profiles. The CodeBuddy CLI profile writes its own `codebuddy-cli` hooks, uses the CLI's Claude-compatible hook response shape, and preserves CodeBuddy IDE hooks plus unrelated settings in the same file.
-
-Hermes Agent is integrated through a generated plugin directory at `~/.hermes/plugins/ping_island/`. Hermes' gateway hook directories under `~/.hermes/hooks/` do not run in the CLI, so Ping Island uses the official `ctx.register_hook()` plugin surface to observe prompt submission, tool activity, model replies, and session end events.
-
-Qwen Code is supported as a first-class hook client through `~/.qwen/settings.json`, and its built-in mascot is the mint-scarf capybara shown in the README GIF strip. The visual is meant to feel calm and dependable, while still carrying a small Qwen-tinted scarf and reply bubble instead of another generic bird or blob.
-
-Kimi CLI is supported through its official hooks in `~/.kimi/config.toml`. Ping Island installs managed `[[hooks]]` entries while preserving unrelated TOML configuration, treats Kimi `Stop` as an assistant-turn completion rather than a closed session, and waits for `SessionEnd` before marking the session ended. Its built-in mascot is the original blue keyboard-orb GIF shown above.
-
-OpenClaw is supported through a managed internal hook directory under `~/.openclaw/hooks/` plus transcript-aware session refresh from `~/.openclaw/agents/main/sessions/`. That combination lets Ping Island surface OpenClaw's lightweight message hooks quickly, then backfill the full conversation from the local session log once the assistant reply lands.
-
-SSH support is a core workflow, not a sidecar script. Ping Island can bootstrap a bridge onto a remote macOS or Linux host, rewrite remote Claude-compatible and Qwen Code hook configs to use that bridge, install supported OpenClaw internal hooks on the remote host, and keep a bidirectional forwarding path back into the local menu-bar UI. That means approvals, follow-up questions, notifications, and jump-back routing from remote SSH terminals still land in the same Island surface on your Mac.
-
-The mascot GIFs used throughout this README are generated from the live `MascotView` implementation via `./scripts/render-mascots.sh`.
-The OpenClaw feature poster in `docs/images/ping-island-openclaw-poster.png` is generated via `./scripts/render-openclaw-poster.sh`.
 
 <a id="installation"></a>
 ## Installation
@@ -130,7 +81,6 @@ The OpenClaw feature poster in `docs/images/ping-island-openclaw-poster.png` is 
 ### Install with Homebrew Cask
 
 ```bash
-brew tap erha19/tap
 brew install --cask ping-island
 ```
 
@@ -169,11 +119,56 @@ The script re-signs the built app bundle with a consistent ad-hoc signature befo
 The generated files land in `releases/unsigned/` as `PingIsland-<version>.dmg` and `PingIsland-<version>.zip`.
 The DMG uses the repo-tracked installer artwork at `docs/images/ping-island-dmg-installer-background.png` by default; set `PING_ISLAND_DMG_BACKGROUND_SOURCE` if you want to preview a different background locally.
 
-To create signed and notarized release packages in GitHub Actions, configure the release secrets described in [docs/sparkle-release.md](docs/sparkle-release.md) and run `.github/workflows/release-packages.yml` against a `v*` tag or the manual workflow dispatch input. Homebrew Cask publishing is documented in [docs/homebrew-cask-release.md](docs/homebrew-cask-release.md).
+To create signed and notarized release packages in GitHub Actions, configure the release secrets described in [docs/sparkle-release.md](docs/sparkle-release.md) and run `.github/workflows/release-packages.yml` against a `v*` tag or the manual workflow dispatch input. Official Homebrew Cask release notes are documented in [docs/homebrew-cask-release.md](docs/homebrew-cask-release.md).
 
 The same workflow also publishes a Linux `PingIslandBridge` asset that Ping Island can download when bootstrapping Linux SSH hosts.
 
 For the full notarized release flow and the GitHub Releases backed Sparkle appcast setup, see [docs/sparkle-release.md](docs/sparkle-release.md).
+
+## What is Ping Island?
+
+Ping Island is a macOS menu bar app that expands into a compact session surface when your coding agents need attention. It listens to Claude-style hooks, Codex hooks, Gemini CLI hooks, Hermes Agent plugin hooks, Pi Agent extension hooks, Qwen Code hooks, Kimi CLI hooks, OpenClaw internal hooks plus session transcripts, the Codex app-server, OpenCode plugins, and compatible IDE integrations so approvals, input requests, completions, and session summaries show up without babysitting terminal tabs.
+
+If you have seen [Vibe Island](https://vibeisland.app/), Ping Island is positioned as an independent open-source alternative in the same category: a native macOS notch/menu bar surface for monitoring and controlling AI coding sessions.
+
+## Features
+
+Ping Island focuses on the moments that actually interrupt coding flow, then keeps them visible and actionable from a native macOS notch surface.
+
+- **Attention-first UI** - Stay compact until a session needs approval, input, review, or intervention.
+- **Act from the notch** - Approve tools, deny requests, and answer follow-up prompts without hunting through tabs.
+- **Claude Code auto-approve** - Turn on per-session auto-approval when you want Claude Code to stop pausing on every permission request.
+- **One-click return** - Jump back to the right iTerm2, Ghostty, Terminal.app, tmux pane, or IDE window.
+- **SSH terminal support** - Bootstrap a remote PingIslandBridge over SSH, rewrite remote hooks to point back at your Mac, forward remote Codex app-server activity, and keep remote terminal activity visible in the same local Island UI.
+- **Multi-agent coverage** - Track Claude Code, Codex, Gemini CLI, Hermes Agent, Pi Agent, Qwen Code, Kimi CLI, OpenClaw, OpenCode, Cursor, Qoder, CodeBuddy, WorkBuddy, GitHub Copilot, and other compatible sessions in one place.
+- **OpenClaw gateway support** - Follow OpenClaw sessions from managed internal hooks, then refill the conversation from OpenClaw's local session transcripts so the Island UI can show the actual back-and-forth instead of a single inbound message.
+- **Codex hook + app-server sync** - Support Codex CLI hooks, live app-server threads, and rollout parsing fallback when needed.
+- **Custom sounds** - Pick per-event macOS sounds or import local sound packs for your own notification style.
+- **Custom agent mascots** - Give each client its own animated mascot override across the notch, session list, and hover UI.
+- **Buddy detach in v0.5.0+** - Drag the active Buddy out of the notch so it can stay nearby as an independent floating companion.
+- **Hermes courier-fox mascot** - Hermes Agent uses a gold courier fox with a winged helmet and satchel so plugin-hook sessions stay visually distinct from the Claude/Qwen family.
+- **Pi terminal-cloud mascot** - Pi Agent uses its own terminal-cloud mascot so extension-hook sessions are easy to spot in the Island UI.
+- **Qwen capybara mascot** - Qwen Code now ships with a mint-scarf capybara mascot tuned for prompt, reply, and notification-heavy flows.
+- **Kimi keyboard-orb mascot** - Kimi CLI keeps its original blue keyboard-orb mascot so its hook sessions stay visually distinct in the README strip and app UI.
+
+<a id="supported-clients"></a>
+## Supported Clients
+
+| Client | Ingress | Focus / return path | Island capabilities |
+| --- | --- | --- | --- |
+| Claude Code | Claude-compatible hooks through `PingIslandBridge` | Terminal.app, iTerm2, Ghostty, tmux, and IDE terminals | Tool approvals, AskUserQuestion replies, compaction alerts, completion popups, auto-approve |
+| Codex App + Codex CLI | Codex CLI hooks, live `codex app-server`, rollout parsing fallback | Codex app, terminal, tmux, and IDE terminals | Approval/input requests, live thread sync, usage snapshots, remote app-server forwarding |
+| Gemini CLI | Gemini CLI hooks in `~/.gemini/settings.json` | Compatible terminal hosts | Session lifecycle, tool activity, notifications, pre-compaction events |
+| Hermes Agent | Official plugin hooks in `~/.hermes/plugins/ping_island/` | Hermes CLI terminal host | User prompts, tool activity, assistant replies, session-end notifications |
+| Pi Agent | Official extension under `~/.pi/agent/extensions/ping_island/` | Pi Agent terminal host | Extension event forwarding, client-aware session tracking, terminal-cloud mascot |
+| Qwen Code | Official hooks in `~/.qwen/settings.json` | Compatible terminal hosts and remote SSH sessions | Permission prompts, notification popups, stop/session-end handling, remote hook forwarding |
+| Kimi CLI | Official `[[hooks]]` entries in `~/.kimi/config.toml` | Compatible terminal hosts | Tool activity, notifications, turn completion, session-end handling |
+| OpenClaw | Managed internal hooks plus local transcript refresh | OpenClaw terminal host | Fast hook status, transcript backfill, message/session state |
+| OpenCode | Generated plugin file under `~/.config/opencode/plugins/` | OpenCode app and terminal host | Plugin event forwarding into the shared Island UI |
+| Cursor | Claude-compatible hooks plus optional VS Code-compatible focus extension | Cursor project window and active terminal | IDE routing, terminal focus, Claude-family session tracking |
+| Qoder / Qoder CLI / QoderWork | Managed hook profiles in `~/.qoder/settings.json` and `~/.qoderwork/settings.json` | Qoder windows, terminal, and supported IDE extension paths | Separate IDE/CLI semantics, approvals where supported, notify-only handling for QoderWork |
+| CodeBuddy / WorkBuddy | Managed hook profiles plus optional VS Code-compatible focus extension | App windows, terminal, and supported IDE extension paths | Claude-family session tracking, client-aware jump-back, follow-up visibility |
+| GitHub Copilot | Copilot hook protocol | Compatible terminal hosts | Copilot CLI / agent hook event status |
 
 ## Testing
 
@@ -288,7 +283,7 @@ Sound packs can use `.wav`, `.mp3`, or `.ogg` files. If a selected pack does not
 ## How It Works
 
 ```text
-Claude / Codex / Gemini CLI / Hermes Agent / Qwen Code / Kimi CLI / OpenCode / Cursor / Qoder / CodeBuddy / WorkBuddy / Copilot / ...
+Claude / Codex / Gemini CLI / Hermes Agent / Pi Agent / Qwen Code / Kimi CLI / OpenCode / Cursor / Qoder / CodeBuddy / WorkBuddy / Copilot / ...
   -> hook or app-server event
     -> Ping Island monitor + normalization layer
       -> SessionStore
@@ -301,6 +296,7 @@ Implementation details worth knowing:
 - Claude-family tools enter through managed hook files plus the embedded `PingIslandBridge` launcher.
 - Codex sessions can come from hook events or the live `codex app-server` websocket monitor.
 - Gemini CLI hooks are installed into `~/.gemini/settings.json`; tool matchers use Gemini's regex-based hook matcher syntax.
+- Pi Agent is wired through a generated TypeScript extension under `~/.pi/agent/extensions/ping_island/` and forwards events through the Claude-compatible bridge with Pi-specific client metadata.
 - Qwen Code hooks are installed into `~/.qwen/settings.json`; the bridge follows the official event names and uses `Stop` / `SessionEnd` / `Notification` messages to surface popup-ready summaries in Island.
 - Kimi CLI hooks are installed into `~/.kimi/config.toml`; Ping Island preserves unrelated TOML content and maps Kimi `Stop` to turn completion while `SessionEnd` closes the session.
 - OpenCode is wired through a generated plugin file under `~/.config/opencode/plugins/` and enabled from the documented global config at `~/.config/opencode/opencode.json`; legacy `config.json` entries are still recognized for cleanup.

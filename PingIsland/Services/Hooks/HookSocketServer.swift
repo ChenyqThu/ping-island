@@ -87,6 +87,10 @@ struct HookEvent: Sendable {
     /// uses `mailagent.*` keys (scenario / mascot / aiSummary / senderName / accent / ...).
     /// Default empty for non-bridge constructors (demo runner / remote).
     let metadata: [String: String]
+    /// True when Codex fires a PermissionRequest hook with `permission_mode=bypassPermissions`,
+    /// meaning Codex has already auto-approved the tool call internally.  Island should
+    /// respond to the hook immediately without showing an approval card.
+    let codexBypassPermissions: Bool
 
     init(
         sessionId: String,
@@ -105,7 +109,8 @@ struct HookEvent: Sendable {
         ingress: SessionIngress = .hookBridge,
         bridgeIntervention: SessionIntervention? = nil,
         suppressInAppPrompt: Bool = false,
-        metadata: [String: String] = [:]
+        metadata: [String: String] = [:],
+        codexBypassPermissions: Bool = false
     ) {
         self.sessionId = sessionId
         self.cwd = cwd
@@ -124,6 +129,7 @@ struct HookEvent: Sendable {
         self.bridgeIntervention = bridgeIntervention
         self.suppressInAppPrompt = suppressInAppPrompt
         self.metadata = metadata
+        self.codexBypassPermissions = codexBypassPermissions
     }
 
     nonisolated var sessionPhase: SessionPhase {
@@ -235,7 +241,8 @@ extension HookEvent {
             ingress: ingress,
             bridgeIntervention: bridgeIntervention?.withResolvedToolUseId(toolUseId),
             suppressInAppPrompt: suppressInAppPrompt,
-            metadata: metadata
+            metadata: metadata,
+            codexBypassPermissions: codexBypassPermissions
         )
     }
 
@@ -257,7 +264,8 @@ extension HookEvent {
             ingress: ingress,
             bridgeIntervention: bridgeIntervention,
             suppressInAppPrompt: suppressInAppPrompt,
-            metadata: metadata
+            metadata: metadata,
+            codexBypassPermissions: codexBypassPermissions
         )
     }
 }
@@ -472,7 +480,16 @@ private struct BridgeEnvelopeIntervention: Codable, Sendable {
         }
 
         var interventionMetadata: [String: String] = [:]
-        for key in ["tool_name", "toolName", "tool_input_json", "toolInputJSON", "tool_use_id"] {
+        for key in [
+            "tool_name",
+            "toolName",
+            "tool_input_json",
+            "toolInputJSON",
+            "tool_use_id",
+            "permission_suggestions",
+            "permission_rules",
+            "permissionRules"
+        ] {
             if let value = metadata[key], !value.isEmpty {
                 interventionMetadata[key] = value
             }
@@ -617,7 +634,11 @@ private extension BridgeEnvelope {
                 metadata: metadata
             ),
             suppressInAppPrompt: (metadata["suppress_in_app_prompt"] == "true"),
-            metadata: metadata
+            metadata: metadata,
+            codexBypassPermissions: (
+                eventType == "PermissionRequest"
+                && metadata["permission_mode"] == "bypassPermissions"
+            )
         )
     }
 
@@ -722,10 +743,13 @@ private extension BridgeEnvelope {
             metadata["origin"],
             metadata["_source"]
         )
-        let explicitOriginator = firstNonEmpty(
+        let explicitMetadataOriginator = firstNonEmpty(
             metadata["client_originator"],
             metadata["originator"],
-            metadata["source_title"],
+            metadata["source_title"]
+        )
+        let explicitOriginator = firstNonEmpty(
+            explicitMetadataOriginator,
             terminalContext.ideName
         )
         let explicitThreadSource = firstNonEmpty(
@@ -755,12 +779,12 @@ private extension BridgeEnvelope {
             metadata["source_process_name"],
             metadata["process_name"]
         )
-        let hostBundleIdentifier = (explicitBundleID ?? terminalBundleID)?
+        let explicitClientBundleIdentifier = explicitBundleID?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
         let effectiveExplicitKind: String?
         let effectiveExplicitName: String?
-        switch hostBundleIdentifier {
+        switch explicitClientBundleIdentifier {
         case "com.qoder.ide":
             effectiveExplicitKind = "qoder"
             effectiveExplicitName = "Qoder"
@@ -778,9 +802,11 @@ private extension BridgeEnvelope {
             explicitKind: effectiveExplicitKind,
             explicitName: effectiveExplicitName,
             explicitBundleIdentifier: explicitBundleID,
-            terminalBundleIdentifier: terminalBundleID,
+            terminalBundleIdentifier: explicitKind == nil && explicitName == nil && explicitBundleID == nil
+                ? nil
+                : terminalBundleID,
             origin: explicitOrigin,
-            originator: explicitOriginator,
+            originator: explicitMetadataOriginator,
             threadSource: explicitThreadSource,
             processName: processName
         )
