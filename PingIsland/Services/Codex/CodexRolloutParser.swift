@@ -342,6 +342,14 @@ actor CodexRolloutParser {
         }
 
         let preview = latestFinalText ?? latestAgentText ?? latestUserText ?? firstUserMessage
+        guard !CodexAuxiliaryHookFilter.isCodexMemoryMaintenanceThread(
+            cwd: resolvedCwd,
+            title: sessionName,
+            preview: preview
+        ) else {
+            return nil
+        }
+
         let conversationInfo = ConversationInfo(
             summary: sessionName ?? firstUserMessage,
             lastMessage: lastMessage,

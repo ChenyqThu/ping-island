@@ -3,6 +3,36 @@ import XCTest
 @testable import Ping_Island
 
 final class CodexRolloutParserTests: XCTestCase {
+    func testRolloutParserIgnoresCodexMemoryMaintenanceThread() async throws {
+        let tempDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectory) }
+
+        let threadId = "019f098a-04fe-7402-9a6d-21108754533d"
+        let rolloutURL = tempDirectory.appendingPathComponent("rollout-\(threadId).jsonl")
+        let rollout = """
+        {"timestamp":"2026-06-27T14:44:29Z","type":"session_meta","payload":{"id":"\(threadId)","cwd":"/tmp/ping-island-home/.codex/memories","title":"memories","originator":"Codex Desktop","source":"desktop"}}
+        {"timestamp":"2026-06-27T14:44:30Z","type":"event_msg","payload":{"type":"user_message","message":"update memory"}}
+        {"timestamp":"2026-06-27T14:46:25Z","type":"event_msg","payload":{"type":"agent_message","phase":"final","message":"Created MEMORY.md and memory_summary.md from the new inputs."}}
+        """
+        try rollout.write(to: rolloutURL, atomically: true, encoding: .utf8)
+
+        let snapshot = await CodexRolloutParser.shared.parseThread(
+            threadId: threadId,
+            fallbackCwd: "/tmp/ping-island-home/.codex/memories",
+            clientInfo: SessionClientInfo(
+                kind: .codexApp,
+                profileID: "codex-app",
+                name: "Codex App",
+                bundleIdentifier: "com.openai.codex",
+                sessionFilePath: rolloutURL.path
+            )
+        )
+
+        XCTAssertNil(snapshot)
+    }
+
     func testRolloutParserPreservesTerminalHostedCodexCLIContext() async throws {
         let tempDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

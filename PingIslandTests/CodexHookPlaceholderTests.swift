@@ -63,15 +63,94 @@ final class CodexHookPlaceholderTests: XCTestCase {
         XCTAssertNil(session)
     }
 
+    func testCodexMemoryMaintenanceHookIsIgnored() async {
+        let sessionId = "codex-memory-\(UUID().uuidString)"
+        let store = SessionStore.shared
+
+        await store.process(.hookReceived(
+            makeCodexEvent(
+                sessionId: sessionId,
+                event: "SessionStart",
+                status: "waiting_for_input",
+                cwd: "/tmp/ping-island-home/.codex/memories"
+            )
+        ))
+
+        await store.process(.hookReceived(
+            makeCodexEvent(
+                sessionId: sessionId,
+                event: "Stop",
+                status: "waiting_for_input",
+                message: "Created MEMORY.md and memory_summary.md from the new inputs.",
+                cwd: "/tmp/ping-island-home/.codex/memories"
+            )
+        ))
+
+        let session = await store.session(for: sessionId)
+        XCTAssertNil(session)
+    }
+
+    func testCodexMemoryMaintenanceAppServerUpsertIsIgnored() async {
+        let sessionId = "codex-memory-upsert-\(UUID().uuidString)"
+        let store = SessionStore.shared
+
+        await store.upsertCodexSession(
+            sessionId: sessionId,
+            name: "memories",
+            preview: "Created MEMORY.md and memory_summary.md from the new inputs.",
+            cwd: "/tmp/ping-island-home/.codex/memories",
+            phase: .waitingForInput,
+            intervention: nil,
+            clientInfo: SessionClientInfo.codexApp(threadId: sessionId)
+        )
+
+        let session = await store.session(for: sessionId)
+        XCTAssertNil(session)
+    }
+
+    func testCodexMemoryMaintenanceSnapshotIsIgnored() async {
+        let sessionId = "codex-memory-snapshot-\(UUID().uuidString)"
+        let store = SessionStore.shared
+
+        await store.syncCodexThreadSnapshot(CodexThreadSnapshot(
+            threadId: sessionId,
+            name: "memories",
+            preview: "Created MEMORY.md and memory_summary.md from the new inputs.",
+            cwd: "/tmp/ping-island-home/.codex/memories",
+            clientInfo: SessionClientInfo.codexApp(threadId: sessionId),
+            intervention: nil,
+            createdAt: Date(),
+            updatedAt: Date(),
+            phase: .waitingForInput,
+            historyItems: [],
+            conversationInfo: ConversationInfo(
+                summary: "memories",
+                lastMessage: "Created MEMORY.md and memory_summary.md from the new inputs.",
+                lastMessageRole: "assistant",
+                lastToolName: nil,
+                firstUserMessage: "update memory",
+                lastUserMessageDate: Date()
+            ),
+            latestTurnId: nil,
+            latestResponseText: "Created MEMORY.md and memory_summary.md from the new inputs.",
+            latestResponsePhase: "final",
+            latestUserText: "update memory"
+        ))
+
+        let session = await store.session(for: sessionId)
+        XCTAssertNil(session)
+    }
+
     private func makeCodexEvent(
         sessionId: String,
         event: String,
         status: String,
-        message: String? = nil
+        message: String? = nil,
+        cwd: String = "/tmp/ping-island-codex-placeholder"
     ) -> HookEvent {
         HookEvent(
             sessionId: sessionId,
-            cwd: "/tmp/ping-island-codex-placeholder",
+            cwd: cwd,
             event: event,
             status: status,
             provider: .codex,

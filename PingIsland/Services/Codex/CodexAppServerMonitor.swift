@@ -899,9 +899,12 @@ actor CodexAppServerMonitor {
 
     private func ingestThreadList(_ response: [String: Any]) async {
         guard let data = response["data"] as? [[String: Any]] else { return }
-        lastThreadDiagnostics = data.map(Self.makeThreadDiagnosticsSnapshot(from:))
-        logger.info("Codex thread list received count=\(data.count, privacy: .public)")
-        for thread in data {
+        let visibleThreads = data.filter { !Self.shouldIgnoreAuxiliaryThread($0) }
+        lastThreadDiagnostics = visibleThreads.map(Self.makeThreadDiagnosticsSnapshot(from:))
+        logger.info(
+            "Codex thread list received count=\(data.count, privacy: .public) filtered=\(data.count - visibleThreads.count, privacy: .public)"
+        )
+        for thread in visibleThreads {
             await ingestThread(thread)
         }
     }
@@ -916,6 +919,12 @@ actor CodexAppServerMonitor {
 
     private func ingestThread(_ thread: [String: Any]) async {
         guard let threadId = thread["id"] as? String else { return }
+        if Self.shouldIgnoreAuxiliaryThread(thread) {
+            logger.notice("Ignoring auxiliary Codex thread=\(threadId, privacy: .public)")
+            removeThreadDiagnostics(threadId: threadId)
+            return
+        }
+
         // Cache approvalMode from app-server data so approval-policy checks
         // don't have to re-read the global state file on every request.
         let rawMode = thread["approvalMode"] as? String ?? thread["approval_mode"] as? String
@@ -932,6 +941,7 @@ actor CodexAppServerMonitor {
             intervention: pendingRequestsByThread[threadId]?.intervention
         )
         let diagnostics = Self.makeThreadDiagnosticsSnapshot(from: thread)
+        let lifecycleDates = Self.threadLifecycleDates(from: thread)
         recordThreadDiagnostics(diagnostics)
         let pathPresent = (thread["path"] as? String)?.isEmpty == false
 
@@ -950,7 +960,9 @@ actor CodexAppServerMonitor {
             phase: phase,
             intervention: pendingRequestsByThread[threadId]?.intervention,
             clientInfo: clientInfo,
-            activityAt: diagnostics.updatedAt
+            createdAt: lifecycleDates.createdAt,
+            activityAt: lifecycleDates.updatedAt,
+            allowSyntheticActivityTimestamp: false
         )
     }
 
@@ -976,19 +988,6 @@ actor CodexAppServerMonitor {
             return collapsed.isEmpty ? nil : collapsed
         }
 
-        func date(from rawValue: Any?) -> Date? {
-            if let value = rawValue as? NSNumber {
-                return Date(timeIntervalSince1970: value.doubleValue)
-            }
-            if let value = rawValue as? Double {
-                return Date(timeIntervalSince1970: value)
-            }
-            if let value = rawValue as? Int {
-                return Date(timeIntervalSince1970: TimeInterval(value))
-            }
-            return nil
-        }
-
         let threadId = thread["id"] as? String ?? "unknown"
         let name = normalize(thread["name"] as? String)
         let preview = normalize(thread["preview"] as? String)
@@ -996,7 +995,7 @@ actor CodexAppServerMonitor {
         let path = normalize(thread["path"] as? String)
         let statusType = (thread["status"] as? [String: Any])?["type"] as? String
         let isEphemeral = thread["ephemeral"] as? Bool ?? false
-        let updatedAt = date(from: thread["updatedAt"])
+        let updatedAt = Self.threadLifecycleDates(from: thread).updatedAt
         let placeholderCandidate =
             !isEphemeral
             && (name?.isEmpty != false)
@@ -1020,8 +1019,35 @@ actor CodexAppServerMonitor {
         )
     }
 
+    private static func shouldIgnoreAuxiliaryThread(_ thread: [String: Any]) -> Bool {
+        CodexAuxiliaryHookFilter.isCodexMemoryMaintenanceThread(
+            cwd: thread["cwd"] as? String,
+            title: thread["name"] as? String,
+            preview: thread["preview"] as? String,
+            metadata: [
+                "session_file_path": sanitizedThreadText(thread["sessionFilePath"] as? String)
+                    ?? sanitizedThreadText(thread["rolloutPath"] as? String)
+                    ?? sanitizedThreadText(thread["path"] as? String)
+                    ?? "",
+                "thread_source": sanitizedThreadText(thread["threadSource"] as? String)
+                    ?? sanitizedThreadText(thread["source"] as? String)
+                    ?? ""
+            ]
+        )
+    }
+
+    private static func sanitizedThreadText(_ text: String?) -> String? {
+        guard let text else { return nil }
+        let collapsed = text
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return collapsed.isEmpty ? nil : collapsed
+    }
+
     private func parseThreadSnapshot(_ thread: [String: Any]) -> CodexThreadSnapshot? {
         guard let threadId = thread["id"] as? String else { return nil }
+        guard !Self.shouldIgnoreAuxiliaryThread(thread) else { return nil }
 
         // Keep the approval-mode cache fresh: thread/read and thread/list both
         // call this path, so any policy change made in Codex Desktop will be
@@ -1030,8 +1056,9 @@ actor CodexAppServerMonitor {
             threadApprovalModes[threadId] = mode
         }
 
-        let createdAt = date(fromUnixTimestamp: thread["createdAt"]) ?? Date()
-        let updatedAt = date(fromUnixTimestamp: thread["updatedAt"]) ?? createdAt
+        let lifecycleDates = Self.threadLifecycleDates(from: thread)
+        let createdAt = lifecycleDates.createdAt ?? Date()
+        let updatedAt = lifecycleDates.updatedAt ?? createdAt
         let status = thread["status"] as? [String: Any]
         let snapshotClientInfo = makeClientInfo(from: thread, threadId: threadId)
         let phase = phaseFromCodexStatus(
@@ -1510,7 +1537,14 @@ actor CodexAppServerMonitor {
         return collapsed.isEmpty ? nil : collapsed
     }
 
-    private func date(fromUnixTimestamp rawValue: Any?) -> Date? {
+    static func threadLifecycleDates(from thread: [String: Any]) -> (createdAt: Date?, updatedAt: Date?) {
+        (
+            createdAt: date(fromUnixTimestamp: thread["createdAt"]),
+            updatedAt: date(fromUnixTimestamp: thread["updatedAt"])
+        )
+    }
+
+    private static func date(fromUnixTimestamp rawValue: Any?) -> Date? {
         if let value = rawValue as? NSNumber {
             return Date(timeIntervalSince1970: value.doubleValue)
         }
@@ -1617,4 +1651,3 @@ actor CodexAppServerMonitor {
     }
 
 }
-

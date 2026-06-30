@@ -1,14 +1,28 @@
 import Foundation
 struct SessionManualAttentionTracker {
+    static let autoApproveApprovalNotificationDelay: TimeInterval = 1.25
+
+    private struct DelayedApprovalNotification {
+        let readyAt: Date
+        var wasPresented: Bool
+    }
+
     private var previousApprovalIds = Set<String>()
     private var previousApprovalToolUseIDs: [String: String] = [:]
     private var previousQuestionIds = Set<String>()
     private var previousQuestionInterventionIDs: [String: String] = [:]
     private var previousTerminalRoutedPromptIds = Set<String>()
     private var previousTerminalRoutedPromptKeys: [String: String] = [:]
+    private var delayedApprovalNotifications: [String: DelayedApprovalNotification] = [:]
 
-    mutating func consumeNewAttentionSession(from instances: [SessionState]) -> SessionState? {
+    mutating func consumeNewAttentionSession(
+        from instances: [SessionState],
+        now: Date = Date()
+    ) -> SessionState? {
         let approvalSessions = instances.filter { $0.needsApprovalResponse }
+        let approvalSessionsByStableId = Dictionary(
+            uniqueKeysWithValues: approvalSessions.map { ($0.stableId, $0) }
+        )
         let currentApprovalIds = Set(approvalSessions.map(\.stableId))
         let currentApprovalToolUseIDs = Dictionary(
             uniqueKeysWithValues: approvalSessions.map { session in
@@ -27,7 +41,18 @@ struct SessionManualAttentionTracker {
                 return sessionId
             }
         )
-        let attentionApprovalIds = newApprovalIds.union(refreshedApprovalIds)
+        let changedApprovalIds = newApprovalIds.union(refreshedApprovalIds)
+        let delayedApprovalIds = updateDelayedApprovalNotifications(
+            from: approvalSessions,
+            changedApprovalIds: changedApprovalIds,
+            now: now
+        )
+        let immediateApprovalIds = Set(changedApprovalIds.filter { stableId in
+            guard let session = approvalSessionsByStableId[stableId] else { return false }
+            return !shouldDelayApprovalNotification(for: session)
+                || approvalRequestKey(for: session) == nil
+        })
+        let attentionApprovalIds = immediateApprovalIds.union(delayedApprovalIds)
 
         let questionSessions = instances.filter { $0.needsQuestionResponse }
         let currentQuestionIds = Set(questionSessions.map(\.stableId))
@@ -90,7 +115,104 @@ struct SessionManualAttentionTracker {
                 || attentionTerminalRoutedPromptIds.contains(session.stableId)
         }
 
-        return attentionCandidates.sorted(by: attentionSort).first
+        let target = attentionCandidates.sorted(by: attentionSort).first
+        markDelayedApprovalNotificationPresentedIfNeeded(for: target)
+        return target
+    }
+
+    mutating func nextDelayedAttentionDate(
+        from instances: [SessionState],
+        now: Date = Date()
+    ) -> Date? {
+        pruneDelayedApprovalNotifications(using: instances)
+        return delayedApprovalNotifications.values
+            .filter { !$0.wasPresented && $0.readyAt > now }
+            .map(\.readyAt)
+            .min()
+    }
+
+    private mutating func updateDelayedApprovalNotifications(
+        from approvalSessions: [SessionState],
+        changedApprovalIds: Set<String>,
+        now: Date
+    ) -> Set<String> {
+        pruneDelayedApprovalNotifications(using: approvalSessions)
+
+        var readyApprovalIds = Set<String>()
+
+        for session in approvalSessions {
+            guard let requestKey = approvalRequestKey(for: session) else { continue }
+
+            guard shouldDelayApprovalNotification(for: session) else {
+                if delayedApprovalNotifications.removeValue(forKey: requestKey) != nil {
+                    readyApprovalIds.insert(session.stableId)
+                }
+                continue
+            }
+
+            if delayedApprovalNotifications[requestKey] == nil,
+                changedApprovalIds.contains(session.stableId) {
+                delayedApprovalNotifications[requestKey] = DelayedApprovalNotification(
+                    readyAt: now.addingTimeInterval(Self.autoApproveApprovalNotificationDelay),
+                    wasPresented: false
+                )
+            }
+
+            guard let delayed = delayedApprovalNotifications[requestKey],
+                  !delayed.wasPresented,
+                  delayed.readyAt <= now else {
+                continue
+            }
+
+            readyApprovalIds.insert(session.stableId)
+        }
+
+        return readyApprovalIds
+    }
+
+    private mutating func pruneDelayedApprovalNotifications(using instances: [SessionState]) {
+        let currentApprovalRequestKeys = Set(
+            instances
+                .filter(\.needsApprovalResponse)
+                .compactMap { approvalRequestKey(for: $0) }
+        )
+        delayedApprovalNotifications = delayedApprovalNotifications.filter { key, _ in
+            currentApprovalRequestKeys.contains(key)
+        }
+    }
+
+    private mutating func markDelayedApprovalNotificationPresentedIfNeeded(for session: SessionState?) {
+        guard let session,
+              let requestKey = approvalRequestKey(for: session),
+              var delayed = delayedApprovalNotifications[requestKey] else {
+            return
+        }
+
+        delayed.wasPresented = true
+        delayedApprovalNotifications[requestKey] = delayed
+    }
+
+    private nonisolated func shouldDelayApprovalNotification(for session: SessionState) -> Bool {
+        session.autoApprovePermissions && session.needsApprovalResponse
+    }
+
+    private nonisolated func approvalRequestKey(for session: SessionState) -> String? {
+        guard session.needsApprovalResponse else { return nil }
+
+        let requestId = [
+            session.activePermission?.toolUseId,
+            session.intervention?.metadata["originalToolUseId"],
+            session.intervention?.metadata["toolUseId"],
+            session.intervention?.metadata["tool_use_id"],
+            session.intervention?.id
+        ].compactMap { value -> String? in
+            guard let value else { return nil }
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }.first
+
+        guard let requestId else { return nil }
+        return "\(session.stableId):\(requestId)"
     }
 
     nonisolated private func attentionSort(_ lhs: SessionState, _ rhs: SessionState) -> Bool {

@@ -72,6 +72,64 @@ final class CodexAuxiliaryHookFilterTests: XCTestCase {
         )
     }
 
+    func testIgnoresCodexMemoryMaintenanceWorkspace() {
+        var filter = CodexAuxiliaryHookFilter()
+
+        XCTAssertTrue(
+            filter.shouldIgnore(
+                provider: .codex,
+                sessionId: "codex-memory-maintenance",
+                eventType: "SessionStart",
+                title: "memories",
+                preview: nil,
+                cwd: "/tmp/ping-island-home/.codex/memories",
+                metadata: [:]
+            )
+        )
+
+        XCTAssertTrue(
+            filter.shouldIgnore(
+                provider: .codex,
+                sessionId: "codex-memory-maintenance",
+                eventType: "Stop",
+                title: "Stop",
+                preview: "Created MEMORY.md",
+                metadata: [:]
+            )
+        )
+    }
+
+    func testIgnoresCodexMemoryMaintenanceSummaryWhenTitleMatches() {
+        var filter = CodexAuxiliaryHookFilter()
+
+        XCTAssertTrue(
+            filter.shouldIgnore(
+                provider: .codex,
+                sessionId: "codex-memory-summary",
+                eventType: "Stop",
+                title: "memories",
+                preview: "Created MEMORY.md and memory_summary.md from the new inputs.",
+                metadata: [:]
+            )
+        )
+    }
+
+    func testDoesNotIgnoreNormalMemoriesProject() {
+        var filter = CodexAuxiliaryHookFilter()
+
+        XCTAssertFalse(
+            filter.shouldIgnore(
+                provider: .codex,
+                sessionId: "codex-user-memories-project",
+                eventType: "UserPromptSubmit",
+                title: "memories",
+                preview: "Add search to my notes app",
+                cwd: "/tmp/ping-island-work/memories",
+                metadata: ["prompt": "Add search to my notes app"]
+            )
+        )
+    }
+
     func testDoesNotIgnoreNormalCodexUserPrompt() {
         var filter = CodexAuxiliaryHookFilter()
 

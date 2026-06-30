@@ -115,8 +115,7 @@ struct SessionHoverDashboardView: View {
                 }
 
                 ForEach(displayedSessions) { session in
-<<<<<<< HEAD
-                    let isHighlighted = session.needsApprovalResponse
+                    let isHighlighted = session.needsApprovalResponse || session.needsQuestionResponse
                     // MailAgent Phase 1 (PRD §5.1 / T3 routing decision §3.2 接入点 B):
                     // mail brand row 走 MailAgentSessionView (Scene 1 mixed monitor, 跟 Claude/Codex 行混合无缝)
                     if session.clientInfo.brand == .mail {
@@ -125,11 +124,7 @@ struct SessionHoverDashboardView: View {
                             sessionMonitor: sessionMonitor,
                             density: density
                         )
-                    } else if session.needsApprovalResponse || session.intervention?.kind == .question {
-=======
-                    let isHighlighted = session.needsApprovalResponse || session.needsQuestionResponse
-                    if isHighlighted {
->>>>>>> main
+                    } else if isHighlighted {
                         HoverSessionCard(
                             session: session,
                             sessionMonitor: sessionMonitor,
@@ -181,7 +176,6 @@ struct SessionAttentionNotificationView: View {
     var body: some View {
         ScrollView(.vertical, showsIndicators: true) {
             VStack(alignment: .leading, spacing: density.containerSpacing) {
-<<<<<<< HEAD
                 // MailAgent Phase 1 (PRD §5.1 / T3 routing decision §3.2 接入点 A):
                 // mail brand session 走 MailAgentSessionView 专属渲染, 不再借 generic HoverSessionCard
                 if session.clientInfo.brand == .mail {
@@ -196,24 +190,13 @@ struct SessionAttentionNotificationView: View {
                         session: session,
                         sessionMonitor: sessionMonitor,
                         opensOnTap: false,
-                        isHighlighted: session.needsApprovalResponse,
+                        isHighlighted: session.needsPromptNotification,
                         density: density,
+                        suppressInAppPromptControls: suppressInAppPromptControls,
                         onQuestionInteractionStateChanged: onQuestionInteractionStateChanged,
                         onActionCompleted: onActionCompleted
                     )
                 }
-=======
-                HoverSessionCard(
-                    session: session,
-                    sessionMonitor: sessionMonitor,
-                    opensOnTap: false,
-                    isHighlighted: session.needsPromptNotification,
-                    density: density,
-                    suppressInAppPromptControls: suppressInAppPromptControls,
-                    onQuestionInteractionStateChanged: onQuestionInteractionStateChanged,
-                    onActionCompleted: onActionCompleted
-                )
->>>>>>> main
             }
             .padding(.horizontal, density.horizontalPadding)
             .padding(.top, density.topPadding)

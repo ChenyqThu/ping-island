@@ -907,6 +907,234 @@ final class DetachedIslandWindowControllerTests: XCTestCase {
         wait(for: [bubblePresented], timeout: 1.0)
     }
 
+    func testCodexCompletionBubbleDoesNotAutoOpenWhileClaudeSessionIsActive() {
+        let originalAutoOpenCompletionPanel = AppSettings.autoOpenCompletionPanel
+        AppSettings.autoOpenCompletionPanel = true
+        defer { AppSettings.autoOpenCompletionPanel = originalAutoOpenCompletionPanel }
+
+        let viewModel = makeViewModel()
+        let sessionMonitor = makeSessionMonitor()
+        let sessionId = "codex-completed-\(UUID().uuidString)"
+        let activityAt = Date()
+        let activeClaude = makeSession(id: "claude-active", phase: .processing)
+        let codexProcessing = makeCodexCompletedSession(
+            id: sessionId,
+            phase: .processing,
+            lastActivity: activityAt
+        )
+        let codexCompleted = makeCodexCompletedSession(id: sessionId, lastActivity: activityAt)
+        sessionMonitor.instances = [activeClaude, codexProcessing]
+
+        let controller = DetachedIslandWindowController(
+            viewModel: viewModel,
+            sessionMonitor: sessionMonitor,
+            onClose: {}
+        )
+        defer { controller.dismiss() }
+
+        controller.present(atPetAnchor: CGPoint(x: 1200, y: 220))
+        controller.applySessionSnapshotForTesting([activeClaude, codexCompleted])
+
+        let suppressed = expectation(description: "codex completion stays suppressed by active claude")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            XCTAssertNil(controller.currentActiveCompletionNotificationForTesting)
+            XCTAssertEqual(controller.renderedBubbleStateForTesting, .hidden)
+            XCTAssertFalse(controller.isBubbleVisibleForTesting)
+            suppressed.fulfill()
+        }
+
+        wait(for: [suppressed], timeout: 1.0)
+
+        controller.applySessionSnapshotForTesting([
+            makeCodexCompletedSession(id: sessionId, phase: .processing, lastActivity: activityAt)
+        ])
+        controller.applySessionSnapshotForTesting([
+            makeCodexCompletedSession(id: sessionId, lastActivity: activityAt)
+        ])
+
+        let notReopened = expectation(description: "suppressed codex completion does not reopen later")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            XCTAssertNil(controller.currentActiveCompletionNotificationForTesting)
+            XCTAssertEqual(controller.renderedBubbleStateForTesting, .hidden)
+            XCTAssertFalse(controller.isBubbleVisibleForTesting)
+            notReopened.fulfill()
+        }
+
+        wait(for: [notReopened], timeout: 1.0)
+    }
+
+    func testCodexCompletionBubbleDoesNotAutoOpenWhileAnotherCodexSessionIsActive() {
+        let originalAutoOpenCompletionPanel = AppSettings.autoOpenCompletionPanel
+        AppSettings.autoOpenCompletionPanel = true
+        defer { AppSettings.autoOpenCompletionPanel = originalAutoOpenCompletionPanel }
+
+        let viewModel = makeViewModel()
+        let sessionMonitor = makeSessionMonitor()
+        let completedSessionId = "codex-completed-\(UUID().uuidString)"
+        let activeSessionId = "codex-active-\(UUID().uuidString)"
+        let activityAt = Date()
+        let activeCodex = makeCodexCompletedSession(
+            id: activeSessionId,
+            phase: .processing,
+            lastActivity: activityAt
+        )
+        let codexProcessing = makeCodexCompletedSession(
+            id: completedSessionId,
+            phase: .processing,
+            lastActivity: activityAt
+        )
+        let codexCompleted = makeCodexCompletedSession(
+            id: completedSessionId,
+            lastActivity: activityAt
+        )
+        sessionMonitor.instances = [activeCodex, codexProcessing]
+
+        let controller = DetachedIslandWindowController(
+            viewModel: viewModel,
+            sessionMonitor: sessionMonitor,
+            onClose: {}
+        )
+        defer { controller.dismiss() }
+
+        controller.present(atPetAnchor: CGPoint(x: 1200, y: 220))
+        controller.applySessionSnapshotForTesting([activeCodex, codexCompleted])
+
+        let suppressed = expectation(description: "codex completion stays suppressed by active codex")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            XCTAssertNil(controller.currentActiveCompletionNotificationForTesting)
+            XCTAssertEqual(controller.renderedBubbleStateForTesting, .hidden)
+            XCTAssertFalse(controller.isBubbleVisibleForTesting)
+            suppressed.fulfill()
+        }
+
+        wait(for: [suppressed], timeout: 1.0)
+    }
+
+    func testDismissedCodexCompletionDoesNotReopenAfterThreadRefresh() {
+        let originalAutoOpenCompletionPanel = AppSettings.autoOpenCompletionPanel
+        AppSettings.autoOpenCompletionPanel = true
+        defer { AppSettings.autoOpenCompletionPanel = originalAutoOpenCompletionPanel }
+
+        let viewModel = makeViewModel()
+        let sessionMonitor = makeSessionMonitor()
+        let sessionId = "codex-completed-\(UUID().uuidString)"
+        let activityAt = Date()
+        let codexCompleted = makeCodexCompletedSession(id: sessionId, lastActivity: activityAt)
+        sessionMonitor.instances = [
+            makeCodexCompletedSession(id: sessionId, phase: .processing, lastActivity: activityAt)
+        ]
+
+        let controller = DetachedIslandWindowController(
+            viewModel: viewModel,
+            sessionMonitor: sessionMonitor,
+            onClose: {}
+        )
+        controller.completionNotificationDismissDelay = 0.2
+        defer { controller.dismiss() }
+
+        controller.present(atPetAnchor: CGPoint(x: 1200, y: 220))
+        controller.applySessionSnapshotForTesting([codexCompleted])
+
+        let bubblePresented = expectation(description: "codex completion bubble auto-opens")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            XCTAssertNotNil(controller.currentActiveCompletionNotificationForTesting)
+            bubblePresented.fulfill()
+        }
+
+        wait(for: [bubblePresented], timeout: 1.0)
+
+        let bubbleDismissed = expectation(description: "codex completion bubble auto-dismisses")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            XCTAssertNil(controller.currentActiveCompletionNotificationForTesting)
+            bubbleDismissed.fulfill()
+        }
+
+        wait(for: [bubbleDismissed], timeout: 1.0)
+
+        controller.applySessionSnapshotForTesting([
+            makeCodexCompletedSession(id: sessionId, phase: .processing, lastActivity: activityAt)
+        ])
+        controller.applySessionSnapshotForTesting([
+            makeCodexCompletedSession(id: sessionId, lastActivity: activityAt)
+        ])
+
+        let notReopened = expectation(description: "dismissed codex completion stays dismissed")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            XCTAssertNil(controller.currentActiveCompletionNotificationForTesting)
+            XCTAssertEqual(controller.renderedBubbleStateForTesting, .hidden)
+            XCTAssertFalse(controller.isBubbleVisibleForTesting)
+            notReopened.fulfill()
+        }
+
+        wait(for: [notReopened], timeout: 1.0)
+    }
+
+    func testDismissedCodexCompletionCanOpenForLaterActivity() {
+        let originalAutoOpenCompletionPanel = AppSettings.autoOpenCompletionPanel
+        AppSettings.autoOpenCompletionPanel = true
+        defer { AppSettings.autoOpenCompletionPanel = originalAutoOpenCompletionPanel }
+
+        let viewModel = makeViewModel()
+        let sessionMonitor = makeSessionMonitor()
+        let sessionId = "codex-completed-\(UUID().uuidString)"
+        let firstActivityAt = Date()
+        let laterActivityAt = firstActivityAt.addingTimeInterval(5)
+        sessionMonitor.instances = [
+            makeCodexCompletedSession(id: sessionId, phase: .processing, lastActivity: firstActivityAt)
+        ]
+
+        let controller = DetachedIslandWindowController(
+            viewModel: viewModel,
+            sessionMonitor: sessionMonitor,
+            onClose: {}
+        )
+        controller.completionNotificationDismissDelay = 0.2
+        defer { controller.dismiss() }
+
+        controller.present(atPetAnchor: CGPoint(x: 1200, y: 220))
+        controller.applySessionSnapshotForTesting([
+            makeCodexCompletedSession(id: sessionId, lastActivity: firstActivityAt)
+        ])
+
+        let firstBubblePresented = expectation(description: "first codex completion opens")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            XCTAssertNotNil(controller.currentActiveCompletionNotificationForTesting)
+            firstBubblePresented.fulfill()
+        }
+
+        wait(for: [firstBubblePresented], timeout: 1.0)
+
+        let firstBubbleDismissed = expectation(description: "first codex completion dismisses")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            XCTAssertNil(controller.currentActiveCompletionNotificationForTesting)
+            firstBubbleDismissed.fulfill()
+        }
+
+        wait(for: [firstBubbleDismissed], timeout: 1.0)
+
+        controller.applySessionSnapshotForTesting([
+            makeCodexCompletedSession(id: sessionId, phase: .processing, lastActivity: laterActivityAt)
+        ])
+        controller.applySessionSnapshotForTesting([
+            makeCodexCompletedSession(id: sessionId, lastActivity: laterActivityAt)
+        ])
+
+        let laterBubblePresented = expectation(description: "later codex completion opens")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            guard let notification = controller.currentActiveCompletionNotificationForTesting else {
+                XCTFail("Expected later completion notification")
+                laterBubblePresented.fulfill()
+                return
+            }
+
+            XCTAssertEqual(notification.session.sessionId, sessionId)
+            XCTAssertEqual(notification.session.lastActivity, laterActivityAt)
+            laterBubblePresented.fulfill()
+        }
+
+        wait(for: [laterBubblePresented], timeout: 1.0)
+    }
+
     func testQoderCLIEndedSessionAutoOpensCompletionBubbleAfterWaitingForInput() {
         let originalAutoOpenCompletionPanel = AppSettings.autoOpenCompletionPanel
         AppSettings.autoOpenCompletionPanel = true
@@ -1500,6 +1728,42 @@ final class DetachedIslandWindowControllerTests: XCTestCase {
                 firstUserMessage: "Do it",
                 lastUserMessageDate: Date()
             )
+        )
+    }
+
+    private func makeCodexCompletedSession(
+        id: String,
+        phase: SessionPhase = .idle,
+        lastActivity: Date = Date()
+    ) -> SessionState {
+        SessionState(
+            sessionId: id,
+            cwd: "/tmp/\(id)",
+            provider: .codex,
+            clientInfo: SessionClientInfo.codexApp(threadId: id),
+            phase: phase,
+            chatItems: [
+                ChatHistoryItem(
+                    id: "\(id)-user",
+                    type: .user("Do it"),
+                    timestamp: lastActivity.addingTimeInterval(-5)
+                ),
+                ChatHistoryItem(
+                    id: "\(id)-assistant",
+                    type: .assistant("All done"),
+                    timestamp: lastActivity
+                )
+            ],
+            conversationInfo: ConversationInfo(
+                summary: nil,
+                lastMessage: "All done",
+                lastMessageRole: "assistant",
+                lastToolName: nil,
+                firstUserMessage: "Do it",
+                lastUserMessageDate: lastActivity.addingTimeInterval(-5)
+            ),
+            lastActivity: lastActivity,
+            createdAt: lastActivity.addingTimeInterval(-10)
         )
     }
 

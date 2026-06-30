@@ -71,6 +71,7 @@ actor SessionStore {
     private let codexHookPlaceholderPruneDelayNs: UInt64 = 10_000_000_000
     private let codexAppServerPlaceholderPruneDelayNs: UInt64 = 60_000_000_000
     private let codexContinuationMergeWindow: TimeInterval = 10 * 60
+    private let codexUnknownHistoricalActivityDate = Date(timeIntervalSince1970: 0)
     private let qoderConversationPollIntervalNs: UInt64 = 250_000_000
     private let qoderConversationPollTimeoutNs: UInt64 = 120_000_000_000
     private let qoderSubagentAssociationWindow: TimeInterval = 2 * 60
@@ -1985,6 +1986,7 @@ actor SessionStore {
         publishState()
 
         await AgentUsageStore.shared.recordFileUpdate(session: session, payload: payload)
+        await recordClaudeFamilyTranscriptUsageIfAvailable(for: session)
 
         await emitToolCompletionEvents(
             sessionId: payload.sessionId,
@@ -2079,6 +2081,43 @@ actor SessionStore {
     ) -> Date {
         guard let currentValue else { return newValue }
         return max(currentValue, newValue)
+    }
+
+    private func resolvedCodexActivityAt(
+        explicitActivityAt: Date?,
+        existingLastActivity: Date?,
+        createdAt: Date?,
+        phase: SessionPhase,
+        allowSyntheticActivityTimestamp: Bool
+    ) -> Date {
+        if let explicitActivityAt {
+            return explicitActivityAt
+        }
+
+        guard !allowSyntheticActivityTimestamp else {
+            return Date()
+        }
+
+        if let existingLastActivity {
+            return existingLastActivity
+        }
+
+        if let createdAt {
+            return createdAt
+        }
+
+        if phase.isActive || phase.needsAttention {
+            return Date()
+        }
+
+        return codexUnknownHistoricalActivityDate
+    }
+
+    private func mergedCreatedAt(
+        existing currentValue: Date,
+        incoming newValue: Date
+    ) -> Date {
+        min(currentValue, newValue)
     }
 
     private func processTimedOutExternalContinuations(now: Date) async {
@@ -2767,6 +2806,51 @@ actor SessionStore {
                 structuredResults: structuredResults
             )
         )
+        await recordClaudeFamilyTranscriptUsageIfAvailable(for: session)
+    }
+
+    private func recordClaudeFamilyTranscriptUsageIfAvailable(sessionId: String) async {
+        guard let session = sessions[sessionId] else { return }
+        await recordClaudeFamilyTranscriptUsageIfAvailable(for: session)
+    }
+
+    private func recordClaudeFamilyTranscriptUsageIfAvailable(for session: SessionState) async {
+        guard shouldRecordClaudeFamilyTranscriptUsage(for: session),
+              let transcriptPath = session.clientInfo.sessionFilePath?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !transcriptPath.isEmpty,
+              let snapshot = try? ClaudeTranscriptUsageLoader.load(from: URL(fileURLWithPath: transcriptPath)) else {
+            return
+        }
+
+        await AgentUsageStore.shared.recordTokenUsage(
+            provider: session.provider,
+            clientInfo: session.clientInfo,
+            sessionID: session.sessionId,
+            sourceKey: transcriptUsageSourceKey(session: session, sourceFilePath: snapshot.sourceFilePath),
+            totals: snapshot.tokenTotals,
+            capturedAt: snapshot.capturedAt ?? Date(),
+            sourceFileSize: snapshot.fileSize,
+            sourceContentHash: snapshot.contentHash,
+            recordInitialSnapshot: true
+        )
+    }
+
+    private nonisolated func shouldRecordClaudeFamilyTranscriptUsage(for session: SessionState) -> Bool {
+        switch session.clientInfo.brand {
+        case .claude, .qoder:
+            return true
+        default:
+            return session.provider == .claude && session.clientInfo.kind == .claudeCode
+        }
+    }
+
+    private nonisolated func transcriptUsageSourceKey(session: SessionState, sourceFilePath: String) -> String {
+        [
+            "transcript",
+            session.provider.rawValue,
+            session.sessionId,
+            URL(fileURLWithPath: sourceFilePath).resolvingSymlinksInPath().path,
+        ].joined(separator: "|")
     }
 
     // MARK: - File Sync Scheduling
@@ -2790,6 +2874,8 @@ actor SessionStore {
             if result.clearDetected {
                 await self?.process(.clearDetected(sessionId: sessionId))
             }
+
+            await self?.recordClaudeFamilyTranscriptUsageIfAvailable(sessionId: sessionId)
 
             let hasPendingCompletedToolResult = await self?.hasPendingCompletedToolResult(
                 sessionId: sessionId,
@@ -3305,9 +3391,35 @@ actor SessionStore {
         phase: SessionPhase,
         intervention: SessionIntervention?,
         clientInfo: SessionClientInfo? = nil,
+        createdAt: Date? = nil,
         activityAt: Date? = nil,
-        metadata: [String: String] = [:]
+        metadata: [String: String] = [:],
+        allowSyntheticActivityTimestamp: Bool = true
     ) {
+        let preliminarySessionId = resolveCodexSessionAlias(sessionId)
+        if case .none = intervention,
+           CodexAuxiliaryHookFilter.isCodexMemoryMaintenanceThread(
+                cwd: cwd,
+                title: name,
+                preview: preview,
+                metadata: [
+                    "session_file_path": clientInfo?.sessionFilePath ?? "",
+                    "thread_source": clientInfo?.threadSource ?? ""
+                ]
+           ) {
+            removeCodexAuxiliarySession(sessionId: preliminarySessionId)
+            return
+        }
+
+        let incomingActivityAt = resolvedCodexActivityAt(
+            explicitActivityAt: activityAt,
+            existingLastActivity: sessions[preliminarySessionId]?.lastActivity,
+            createdAt: createdAt,
+            phase: phase,
+            allowSyntheticActivityTimestamp: allowSyntheticActivityTimestamp
+        )
+        let initialCreatedAt = createdAt
+            ?? (allowSyntheticActivityTimestamp ? Date() : incomingActivityAt)
         let resolvedSessionId = resolveOrAdoptCodexSession(
             incomingSessionId: sessionId,
             name: name,
@@ -3323,7 +3435,8 @@ actor SessionStore {
                 firstUserMessage: nil,
                 lastUserMessageDate: nil
             ),
-            activityAt: activityAt ?? Date(),
+            activityAt: incomingActivityAt,
+            createdAt: initialCreatedAt,
             ingress: .codexAppServer
         )
         let restoredAssociation = persistedAssociation(for: .codex, sessionId: resolvedSessionId)
@@ -3347,8 +3460,13 @@ actor SessionStore {
             sessionName: name ?? restoredAssociation?.sessionName,
             previewText: preview,
             intervention: intervention,
-            phase: phase
+            phase: phase,
+            lastActivity: incomingActivityAt,
+            createdAt: initialCreatedAt
         )
+        if let createdAt {
+            session.createdAt = mergedCreatedAt(existing: session.createdAt, incoming: createdAt)
+        }
 
         session.provider = .codex
         session.clientInfo = normalizedClientInfo(
@@ -3384,7 +3502,7 @@ actor SessionStore {
         } else if shouldPreserveActivePhaseDuringApparentIdle(
             session: session,
             incomingPhase: phase,
-            referenceDate: activityAt ?? Date(),
+            referenceDate: incomingActivityAt,
             previousLastActivity: existingLastActivity
         ) {
             // Keep the fresher active state until a stronger non-idle signal arrives.
@@ -3392,7 +3510,7 @@ actor SessionStore {
             currentPhase: session.phase,
             incomingPhase: phase,
             currentLastActivity: existingLastActivity,
-            incomingActivityAt: activityAt ?? Date()
+            incomingActivityAt: incomingActivityAt
         ) {
             // Keep the fresher active state until Codex catches up with a newer snapshot.
         } else if session.phase.canTransition(to: phase) || session.phase == phase {
@@ -3414,14 +3532,14 @@ actor SessionStore {
         if shouldPreserveActivePhaseDuringApparentIdle(
             session: session,
             incomingPhase: phase,
-            referenceDate: activityAt ?? Date(),
+            referenceDate: incomingActivityAt,
             previousLastActivity: existingLastActivity
         ) {
-            session.lastActivity = existingLastActivity ?? (activityAt ?? Date())
+            session.lastActivity = existingLastActivity ?? incomingActivityAt
         } else {
             session.lastActivity = mergedLastActivity(
                 existing: existingLastActivity,
-                incoming: activityAt ?? Date()
+                incoming: incomingActivityAt
             )
         }
 
@@ -3478,6 +3596,20 @@ actor SessionStore {
         _ snapshot: CodexThreadSnapshot,
         ingress: SessionIngress = .codexAppServer
     ) {
+        if case .none = snapshot.intervention,
+           CodexAuxiliaryHookFilter.isCodexMemoryMaintenanceThread(
+                cwd: snapshot.cwd,
+                title: snapshot.name,
+                preview: snapshot.displayResultText ?? snapshot.preview,
+                metadata: [
+                    "session_file_path": snapshot.clientInfo?.sessionFilePath ?? "",
+                    "thread_source": snapshot.clientInfo?.threadSource ?? ""
+                ]
+           ) {
+            removeCodexAuxiliarySession(sessionId: resolveCodexSessionAlias(snapshot.threadId))
+            return
+        }
+
         let resolvedSessionId = ingress == .codexAppServer
             ? resolveOrAdoptCodexSession(
                 incomingSessionId: snapshot.threadId,
@@ -3488,6 +3620,7 @@ actor SessionStore {
                 clientInfo: snapshot.clientInfo,
                 conversationInfo: snapshot.conversationInfo,
                 activityAt: snapshot.updatedAt,
+                createdAt: snapshot.createdAt,
                 ingress: ingress
             )
             : resolveCodexSessionAlias(snapshot.threadId)
@@ -3514,8 +3647,12 @@ actor SessionStore {
             ingress: .codexAppServer,
             sessionName: snapshot.name ?? restoredAssociation?.sessionName,
             previewText: snapshot.preview,
-            phase: snapshot.phase
+            phase: snapshot.phase,
+            lastActivity: snapshot.updatedAt,
+            createdAt: snapshot.createdAt
         )
+        session.createdAt = mergedCreatedAt(existing: session.createdAt, incoming: snapshot.createdAt)
+        let snapshotPhase = resolvedCodexSnapshotPhase(snapshot, currentSession: session)
 
         session.provider = .codex
         session.clientInfo = normalizedClientInfo(
@@ -3542,7 +3679,7 @@ actor SessionStore {
         let shouldPreserveExternalIntervention = !snapshot.isTurnInterrupted && shouldPreserveExternalCodexIntervention(
             current: session.intervention,
             incoming: snapshot.intervention,
-            nextPhase: snapshot.phase,
+            nextPhase: snapshotPhase,
             clientKind: session.clientInfo.kind
         )
         if !shouldPreserveExternalIntervention {
@@ -3552,28 +3689,28 @@ actor SessionStore {
             if let hookPermissionPhase = restoredCodexHookPermissionPhase(from: session.intervention) {
                 session.phase = hookPermissionPhase
             } else if !session.phase.needsAttention {
-                session.phase = snapshot.phase
+                session.phase = snapshotPhase
             }
-        } else if snapshot.isTurnInterrupted, snapshot.phase == .idle {
+        } else if snapshot.isTurnInterrupted, snapshotPhase == .idle {
             session.phase = .idle
         } else if shouldPreserveActivePhaseDuringApparentIdle(
             session: session,
-            incomingPhase: snapshot.phase,
+            incomingPhase: snapshotPhase,
             referenceDate: snapshot.updatedAt,
             previousLastActivity: existingLastActivity
         ) {
             // Keep the fresher active state until a stronger non-idle signal arrives.
         } else if shouldPreserveActivePhaseFromStaleCodexRefresh(
             currentPhase: session.phase,
-            incomingPhase: snapshot.phase,
+            incomingPhase: snapshotPhase,
             currentLastActivity: existingLastActivity,
             incomingActivityAt: snapshot.updatedAt
         ) {
             // Keep the fresher active state until Codex catches up with a newer snapshot.
         } else if case .none = session.intervention {
-            session.phase = snapshot.phase
-        } else if snapshot.phase.needsAttention {
-            session.phase = snapshot.phase
+            session.phase = snapshotPhase
+        } else if snapshotPhase.needsAttention {
+            session.phase = snapshotPhase
         }
         let hasIntervention: Bool
         if case .some = session.intervention {
@@ -3592,7 +3729,7 @@ actor SessionStore {
         }
         if shouldPreserveActivePhaseDuringApparentIdle(
             session: session,
-            incomingPhase: snapshot.phase,
+            incomingPhase: snapshotPhase,
             referenceDate: snapshot.updatedAt,
             previousLastActivity: existingLastActivity
         ) {
@@ -3627,6 +3764,39 @@ actor SessionStore {
                 )
             }
         }
+    }
+
+    private func removeCodexAuxiliarySession(sessionId: String) {
+        let resolvedSessionId = resolveCodexSessionAlias(sessionId)
+        let existed = sessions.removeValue(forKey: resolvedSessionId) != nil
+        clearCodexSessionAliases(for: resolvedSessionId)
+        cancelPendingSync(sessionId: resolvedSessionId)
+        cancelPendingCodexPlaceholderPrune(sessionId: resolvedSessionId)
+        lastCodexRolloutParseAt.removeValue(forKey: resolvedSessionId)
+        if existed {
+            publishState()
+        }
+    }
+
+    private func resolvedCodexSnapshotPhase(
+        _ snapshot: CodexThreadSnapshot,
+        currentSession: SessionState?
+    ) -> SessionPhase {
+        guard snapshot.phase == .idle else {
+            return snapshot.phase
+        }
+        if case .some = currentSession?.intervention {
+            return snapshot.phase
+        }
+        if case .some = snapshot.intervention {
+            return snapshot.phase
+        }
+        guard !snapshot.isTurnInterrupted,
+              snapshot.hasCompletedAssistantReply else {
+            return snapshot.phase
+        }
+
+        return .waitingForInput
     }
 
     private func shouldPreserveExternalCodexIntervention(
@@ -4266,6 +4436,7 @@ actor SessionStore {
         clientInfo: SessionClientInfo?,
         conversationInfo: ConversationInfo,
         activityAt: Date,
+        createdAt: Date?,
         ingress: SessionIngress
     ) -> String {
         let resolvedIncomingId = resolveCodexSessionAlias(incomingSessionId)
@@ -4299,7 +4470,8 @@ actor SessionStore {
             previewText: preview,
             phase: phase,
             conversationInfo: conversationInfo,
-            lastActivity: activityAt
+            lastActivity: activityAt,
+            createdAt: createdAt ?? Date()
         )
 
         guard let existingSession = sessions.values
@@ -4548,7 +4720,7 @@ actor SessionStore {
         }
 
         clearCodexSessionAliases(for: event.sessionId)
-        removeIgnoredCodexPlaceholderIfNeeded(sessionId: event.sessionId)
+        removeIgnoredCodexAuxiliarySessionIfNeeded(sessionId: event.sessionId)
         if event.event == "Stop" || event.event == "SessionEnd" {
             ignoredCodexAuxiliaryHookSessionIds.remove(event.sessionId)
         }
@@ -4559,13 +4731,29 @@ actor SessionStore {
     }
 
     private func removeIgnoredCodexPlaceholderIfNeeded(sessionId: String) {
+        removeIgnoredCodexAuxiliarySessionIfNeeded(sessionId: sessionId)
+    }
+
+    private func removeIgnoredCodexAuxiliarySessionIfNeeded(sessionId: String) {
         guard let session = sessions[sessionId],
-              isLikelyEmptyCodexPlaceholder(session) else {
+              isLikelyEmptyCodexPlaceholder(session) || isCodexMemoryMaintenanceSession(session) else {
             return
         }
 
-        sessions.removeValue(forKey: sessionId)
-        cancelPendingCodexPlaceholderPrune(sessionId: sessionId)
+        removeCodexAuxiliarySession(sessionId: sessionId)
+    }
+
+    private func isCodexMemoryMaintenanceSession(_ session: SessionState) -> Bool {
+        guard session.provider == .codex else { return false }
+        return CodexAuxiliaryHookFilter.isCodexMemoryMaintenanceThread(
+            cwd: session.cwd,
+            title: session.sessionName,
+            preview: session.previewText ?? session.conversationInfo.lastMessage ?? session.latestHookMessage,
+            metadata: [
+                "session_file_path": session.clientInfo.sessionFilePath ?? "",
+                "thread_source": session.clientInfo.threadSource ?? ""
+            ]
+        )
     }
 
     private func shouldIgnoreCodexHookEvent(_ event: HookEvent, existingSession: SessionState?) -> Bool {
@@ -4577,9 +4765,21 @@ actor SessionStore {
             return true
         }
 
-        guard event.clientInfo.sessionFilePath?.isEmpty != false else { return false }
         guard !event.expectsResponse else { return false }
         guard case .none = event.intervention else { return false }
+        if CodexAuxiliaryHookFilter.isCodexMemoryMaintenanceThread(
+            cwd: event.cwd,
+            title: existingSession?.sessionName,
+            preview: event.message,
+            metadata: [
+                "session_file_path": event.clientInfo.sessionFilePath ?? "",
+                "thread_source": event.clientInfo.threadSource ?? ""
+            ]
+        ) {
+            return true
+        }
+
+        guard event.clientInfo.sessionFilePath?.isEmpty != false else { return false }
         if let existingSession {
             guard isLikelyEmptyCodexPlaceholder(existingSession) else {
                 return false

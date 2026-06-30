@@ -1100,15 +1100,15 @@ private extension BridgeProvider {
 }
 
 struct CodexAuxiliaryHookFilter {
-    private static let titleGenerationPromptPrefix =
+    private nonisolated static let titleGenerationPromptPrefix =
         "you are a helpful assistant. you will be presented with a user prompt"
-    private static let titleGenerationPromptRoleMarker =
+    private nonisolated static let titleGenerationPromptRoleMarker =
         "your job is to provide a short title"
-    private static let titleGenerationPromptAlternateRoleMarker =
+    private nonisolated static let titleGenerationPromptAlternateRoleMarker =
         "generate a concise ui title"
-    private static let titleGenerationPromptDisplayMarker =
+    private nonisolated static let titleGenerationPromptDisplayMarker =
         "title you generate will be shown in the ui"
-    private static let titleGenerationPromptReturnMarker =
+    private nonisolated static let titleGenerationPromptReturnMarker =
         "return only the title"
 
     private let sessionRetention: TimeInterval
@@ -1124,6 +1124,7 @@ struct CodexAuxiliaryHookFilter {
         eventType: String,
         title: String?,
         preview: String?,
+        cwd: String? = nil,
         metadata: [String: String],
         now: Date = Date()
     ) -> Bool {
@@ -1140,7 +1141,17 @@ struct CodexAuxiliaryHookFilter {
             return true
         }
 
-        let prompt = firstNonEmpty(
+        if Self.isCodexMemoryMaintenanceThread(
+            cwd: cwd ?? metadata["cwd"],
+            title: title,
+            preview: preview,
+            metadata: metadata
+        ) {
+            ignoredSessionIDs[sessionId] = now
+            return true
+        }
+
+        let prompt = Self.firstNonEmpty(
             metadata["prompt"],
             metadata["message"],
             preview,
@@ -1152,7 +1163,7 @@ struct CodexAuxiliaryHookFilter {
         return true
     }
 
-    static func isCodexTitleGenerationPrompt(_ prompt: String?) -> Bool {
+    nonisolated static func isCodexTitleGenerationPrompt(_ prompt: String?) -> Bool {
         guard let prompt = normalizedPrompt(prompt), !prompt.isEmpty else {
             return false
         }
@@ -1169,13 +1180,63 @@ struct CodexAuxiliaryHookFilter {
             && hasDisplayOrReturnInstruction
     }
 
+    nonisolated static func isCodexMemoryMaintenanceThread(
+        cwd: String?,
+        title: String?,
+        preview: String?,
+        metadata: [String: String] = [:]
+    ) -> Bool {
+        if isCodexMemoryWorkspace(cwd) {
+            return true
+        }
+
+        let metadataPath = firstNonEmpty(
+            metadata["cwd"],
+            metadata["workspace"],
+            metadata["workspace_path"],
+            metadata["session_file_path"],
+            metadata["rollout_path"],
+            metadata["transcript_path"]
+        )
+        if isCodexMemoryWorkspace(metadataPath) {
+            return true
+        }
+
+        let normalizedTitle = normalizedPrompt(title)
+        let text = firstNonEmpty(
+            metadata["message"],
+            metadata["last_assistant_message"],
+            metadata["prompt"],
+            preview
+        )
+        guard normalizedTitle == "memories" || normalizedTitle == "memory" else {
+            return false
+        }
+        guard let normalizedText = normalizedPrompt(text) else {
+            return false
+        }
+
+        return normalizedText.contains("memory.md")
+            && normalizedText.contains("memory_summary.md")
+    }
+
+    private nonisolated static func isCodexMemoryWorkspace(_ path: String?) -> Bool {
+        guard let path = firstNonEmpty(path) else { return false }
+        let components = URL(fileURLWithPath: path)
+            .standardizedFileURL
+            .pathComponents
+            .map { $0.lowercased() }
+        guard components.count >= 2 else { return false }
+        return Array(components.suffix(2)) == [".codex", "memories"]
+    }
+
     private mutating func pruneExpiredSessions(referenceDate: Date) {
         ignoredSessionIDs = ignoredSessionIDs.filter { _, seenAt in
             referenceDate.timeIntervalSince(seenAt) < sessionRetention
         }
     }
 
-    private static func normalizedPrompt(_ prompt: String?) -> String? {
+    private nonisolated static func normalizedPrompt(_ prompt: String?) -> String? {
         guard let prompt else { return nil }
         let collapsed = prompt
             .replacingOccurrences(of: "\n", with: " ")
@@ -1187,7 +1248,7 @@ struct CodexAuxiliaryHookFilter {
         return collapsed.isEmpty ? nil : collapsed
     }
 
-    private func firstNonEmpty(_ values: String?...) -> String? {
+    private nonisolated static func firstNonEmpty(_ values: String?...) -> String? {
         values.compactMap { value -> String? in
             guard let value else { return nil }
             let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1719,14 +1780,20 @@ class HookSocketServer {
             return
         }
 
-        if codexAuxiliaryHookFilter.shouldIgnore(
-            provider: envelope.provider.sessionProvider,
-            sessionId: envelope.resolvedSessionID,
-            eventType: envelope.eventType,
-            title: envelope.title,
-            preview: envelope.preview,
-            metadata: envelope.metadata
-        ) {
+        var event = envelope.hookEvent
+        let expectsResponse = envelope.expectsResponse || event.expectsResponse
+
+        if !expectsResponse,
+           event.bridgeIntervention == nil,
+           codexAuxiliaryHookFilter.shouldIgnore(
+                provider: event.provider,
+                sessionId: event.sessionId,
+                eventType: event.event,
+                title: envelope.title,
+                preview: envelope.preview,
+                cwd: event.cwd,
+                metadata: envelope.metadata
+           ) {
             logger.debug(
                 "Ignoring auxiliary Codex hook event=\(envelope.eventType, privacy: .public) session=\(envelope.resolvedSessionID.prefix(8), privacy: .public)"
             )
@@ -1742,8 +1809,6 @@ class HookSocketServer {
             return
         }
 
-        let expectsResponse = envelope.expectsResponse || envelope.hookEvent.expectsResponse
-        var event = envelope.hookEvent
         logger.debug("Received bridge envelope provider=\(envelope.provider.rawValue, privacy: .public) event=\(envelope.eventType, privacy: .public) session=\(event.sessionId.prefix(8), privacy: .public)")
         if event.clientInfo.isQwenCodeClient {
             let lastAssistant = envelope.metadata["last_assistant_message"] ?? ""

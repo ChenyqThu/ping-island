@@ -212,6 +212,8 @@ struct SessionListView: View {
 
     private func activateSession(_ session: SessionState) {
         guard !session.clientInfo.suppressesActivationNavigation else { return }
+        selectSession(session)
+        viewModel.notchClose()
         Task {
             let targetSession = await interactionTargetSession(for: session)
             _ = await SessionLauncher.shared.activate(targetSession)
@@ -540,6 +542,10 @@ private struct SubagentAttachmentRow: View {
         SessionPhaseHelpers.timeBadgeLabel(for: session.attentionRequestedAt ?? session.lastActivity)
     }
 
+    private var needsInAppResponse: Bool {
+        session.needsQuestionResponse || session.needsApprovalResponse
+    }
+
     private var rowFill: Color {
         if isSelected {
             return Color.white.opacity(isHovered ? 0.11 : 0.08)
@@ -602,7 +608,7 @@ private struct SubagentAttachmentRow: View {
         .contentShape(Rectangle())
         .onTapGesture(count: 2) {
             onSelect()
-            onChat()
+            perform(SessionListRowClickBehavior.doubleTapAction(needsInAppResponse: needsInAppResponse))
         }
         .onTapGesture {
             onSelect()
@@ -625,6 +631,17 @@ private struct SubagentAttachmentRow: View {
             .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return collapsed.isEmpty ? nil : collapsed
+    }
+
+    private func perform(_ action: SessionListRowClickAction) {
+        switch action {
+        case .activate:
+            onActivate()
+        case .chat:
+            onChat()
+        case .toggleExpanded:
+            break
+        }
     }
 
     nonisolated private static func titleCased(_ text: String) -> String {
@@ -730,6 +747,10 @@ struct InstanceRow: View {
         session.usesTitleOnlySubagentPresentation
     }
 
+    private var needsInAppResponse: Bool {
+        session.needsQuestionResponse || isWaitingForApproval
+    }
+
     private var projectTitleFontSize: CGFloat {
         max(11, titleFontSize - 1)
     }
@@ -805,31 +826,37 @@ struct InstanceRow: View {
                 baseLeadingContent
                     .onTapGesture(count: 2) {
                         onSelect()
-                        onActivate()
+                        perform(SessionListRowClickBehavior.doubleTapAction(needsInAppResponse: needsInAppResponse))
                     }
                     .onTapGesture {
                         onSelect()
-                        onToggleExpanded()
+                        perform(SessionListRowClickBehavior.primaryTapAction(
+                            isMinimalCompactPresentation: isMinimalCompactPresentation
+                        ))
                     }
             } else if isCodexSubagentCompactPresentation {
                 baseLeadingContent
                     .onTapGesture(count: 2) {
                         onSelect()
-                        onChat()
+                        perform(SessionListRowClickBehavior.doubleTapAction(needsInAppResponse: needsInAppResponse))
                     }
                     .onTapGesture {
                         onSelect()
-                        onActivate()
+                        perform(SessionListRowClickBehavior.primaryTapAction(
+                            isMinimalCompactPresentation: isMinimalCompactPresentation
+                        ))
                     }
             } else {
                 baseLeadingContent
                     .onTapGesture(count: 2) {
                         onSelect()
-                        onChat()
+                        perform(SessionListRowClickBehavior.doubleTapAction(needsInAppResponse: needsInAppResponse))
                     }
                     .onTapGesture {
                         onSelect()
-                        onActivate()
+                        perform(SessionListRowClickBehavior.primaryTapAction(
+                            isMinimalCompactPresentation: isMinimalCompactPresentation
+                        ))
                     }
             }
         }
@@ -1519,6 +1546,36 @@ struct InstanceRow: View {
         return collapsed.isEmpty ? nil : collapsed
     }
 
+    private func perform(_ action: SessionListRowClickAction) {
+        switch action {
+        case .activate:
+            onActivate()
+        case .chat:
+            onChat()
+        case .toggleExpanded:
+            onToggleExpanded()
+        }
+    }
+}
+
+enum SessionListRowClickAction: Equatable {
+    case activate
+    case chat
+    case toggleExpanded
+}
+
+enum SessionListRowClickBehavior {
+    nonisolated static func primaryTapAction(
+        isMinimalCompactPresentation: Bool
+    ) -> SessionListRowClickAction {
+        isMinimalCompactPresentation ? .toggleExpanded : .activate
+    }
+
+    nonisolated static func doubleTapAction(
+        needsInAppResponse: Bool
+    ) -> SessionListRowClickAction {
+        needsInAppResponse ? .chat : .activate
+    }
 }
 
 private struct QueuePreviewLine: Identifiable {

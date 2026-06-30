@@ -2,6 +2,121 @@ import XCTest
 @testable import Ping_Island
 
 final class SessionStoreCodexInterventionTests: XCTestCase {
+    func testHistoricalCodexThreadListCreatedAtIsPreserved() async throws {
+        let sessionId = "codex-historical-thread-\(UUID().uuidString)"
+        let store = SessionStore.shared
+        let createdTimestamp: TimeInterval = 1_700_000_000
+        let updatedTimestamp: TimeInterval = 1_700_003_600
+        let lifecycleDates = CodexAppServerMonitor.threadLifecycleDates(from: [
+            "id": sessionId,
+            "createdAt": createdTimestamp,
+            "updatedAt": updatedTimestamp
+        ])
+        let createdAt = try XCTUnwrap(lifecycleDates.createdAt)
+        let updatedAt = try XCTUnwrap(lifecycleDates.updatedAt)
+
+        await store.upsertCodexSession(
+            sessionId: sessionId,
+            name: "Historical thread",
+            preview: "Earlier assistant reply",
+            cwd: "/tmp/project",
+            phase: .idle,
+            intervention: nil,
+            clientInfo: SessionClientInfo.codexApp(threadId: sessionId),
+            createdAt: createdAt,
+            activityAt: updatedAt
+        )
+
+        let session = await store.session(for: sessionId)
+        XCTAssertEqual(session?.createdAt, createdAt)
+        XCTAssertEqual(session?.lastActivity, updatedAt)
+
+        await store.process(.sessionArchived(sessionId: sessionId))
+    }
+
+    func testCodexThreadListRefreshWithoutLifecycleDatesPreservesExistingActivity() async throws {
+        let sessionId = "codex-refresh-without-lifecycle-\(UUID().uuidString)"
+        let store = SessionStore.shared
+        let createdAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let updatedAt = createdAt.addingTimeInterval(3_600)
+
+        await store.upsertCodexSession(
+            sessionId: sessionId,
+            name: "Historical thread",
+            preview: "Earlier assistant reply",
+            cwd: "/tmp/project",
+            phase: .idle,
+            intervention: nil,
+            clientInfo: SessionClientInfo.codexApp(threadId: sessionId),
+            createdAt: createdAt,
+            activityAt: updatedAt
+        )
+
+        await store.upsertCodexSession(
+            sessionId: sessionId,
+            name: "Historical thread",
+            preview: "Earlier assistant reply",
+            cwd: "/tmp/project",
+            phase: .idle,
+            intervention: nil,
+            clientInfo: SessionClientInfo.codexApp(threadId: sessionId),
+            allowSyntheticActivityTimestamp: false
+        )
+
+        let session = await store.session(for: sessionId)
+        XCTAssertEqual(session?.createdAt, createdAt)
+        XCTAssertEqual(session?.lastActivity, updatedAt)
+
+        await store.process(.sessionArchived(sessionId: sessionId))
+    }
+
+    func testNewIdleCodexThreadListItemWithoutLifecycleDatesIsNotRecentActivity() async throws {
+        let sessionId = "codex-undated-idle-thread-\(UUID().uuidString)"
+        let store = SessionStore.shared
+        let historicalFallback = Date(timeIntervalSince1970: 0)
+
+        await store.upsertCodexSession(
+            sessionId: sessionId,
+            name: "Undated idle thread",
+            preview: "Earlier assistant reply",
+            cwd: "/tmp/project",
+            phase: .idle,
+            intervention: nil,
+            clientInfo: SessionClientInfo.codexApp(threadId: sessionId),
+            allowSyntheticActivityTimestamp: false
+        )
+
+        let storedSession = await store.session(for: sessionId)
+        let session = try XCTUnwrap(storedSession)
+        XCTAssertEqual(session.createdAt, historicalFallback)
+        XCTAssertEqual(session.lastActivity, historicalFallback)
+        let completedSession = SessionState(
+            sessionId: session.sessionId,
+            cwd: session.cwd,
+            provider: .codex,
+            clientInfo: session.clientInfo,
+            phase: .idle,
+            chatItems: [
+                ChatHistoryItem(
+                    id: "assistant",
+                    type: .assistant("Done earlier"),
+                    timestamp: historicalFallback
+                )
+            ],
+            lastActivity: session.lastActivity,
+            createdAt: session.createdAt
+        )
+        XCTAssertFalse(
+            SessionCompletionNotificationPolicy.shouldQueueCompletedNotification(
+                for: completedSession,
+                previousPhase: nil,
+                isEnabled: true
+            )
+        )
+
+        await store.process(.sessionArchived(sessionId: sessionId))
+    }
+
     func testCodexAppServerIdleRefreshDoesNotClearExternalOnlyIntervention() async {
         let sessionId = "codex-external-\(UUID().uuidString)"
         let store = SessionStore.shared
@@ -114,6 +229,85 @@ final class SessionStoreCodexInterventionTests: XCTestCase {
         await store.process(.sessionArchived(sessionId: sessionId))
     }
 
+    func testCodexIdleSnapshotDoesNotClearExistingExternalQuestion() async {
+        let sessionId = "codex-existing-question-\(UUID().uuidString)"
+        let store = SessionStore.shared
+        let startedAt = Date()
+        let intervention = SessionIntervention(
+            id: "call_question_1",
+            kind: .question,
+            title: "Codex Needs Input",
+            message: "Pick an implementation path.",
+            options: [],
+            questions: [
+                SessionInterventionQuestion(
+                    id: "path",
+                    header: "Path",
+                    prompt: "Pick an implementation path.",
+                    detail: nil,
+                    options: [
+                        SessionInterventionOption(id: "minimal", title: "Minimal", detail: nil)
+                    ],
+                    allowsMultiple: false,
+                    allowsOther: true,
+                    isSecret: false
+                )
+            ],
+            supportsSessionScope: false,
+            metadata: [
+                "source": "codex_rollout_request_user_input",
+                "responseMode": "external_only",
+                "toolUseId": "call_question_1"
+            ]
+        )
+
+        await store.upsertCodexSession(
+            sessionId: sessionId,
+            name: "Codex",
+            preview: intervention.message,
+            cwd: "/tmp/project",
+            phase: .waitingForInput,
+            intervention: intervention,
+            clientInfo: SessionClientInfo(kind: .codexCLI, profileID: "codex-cli", name: "Codex")
+        )
+
+        await store.syncCodexThreadSnapshot(
+            CodexThreadSnapshot(
+                threadId: sessionId,
+                name: "Codex",
+                preview: "Previous assistant reply",
+                cwd: "/tmp/project",
+                clientInfo: SessionClientInfo(kind: .codexCLI, profileID: "codex-cli", name: "Codex"),
+                intervention: nil,
+                createdAt: startedAt,
+                updatedAt: startedAt.addingTimeInterval(5),
+                phase: .idle,
+                historyItems: [
+                    ChatHistoryItem(id: "assistant", type: .assistant("Previous assistant reply"), timestamp: startedAt)
+                ],
+                conversationInfo: ConversationInfo(
+                    summary: "Codex",
+                    lastMessage: "Previous assistant reply",
+                    lastMessageRole: "assistant",
+                    lastToolName: nil,
+                    firstUserMessage: "start",
+                    lastUserMessageDate: startedAt
+                ),
+                latestTurnId: "turn-1",
+                latestResponseText: "Previous assistant reply",
+                latestResponsePhase: "final",
+                latestUserText: "start"
+            )
+        )
+
+        let session = await store.session(for: sessionId)
+        XCTAssertEqual(session?.intervention?.id, "call_question_1")
+        XCTAssertEqual(session?.phase, .waitingForInput)
+        XCTAssertFalse(session.map(SessionCompletionStateEvaluator.isCompletedReadySession) ?? true)
+
+        await store.process(.sessionArchived(sessionId: sessionId))
+    }
+
     func testCodexAppServerIdleRefreshDoesNotDowngradeActiveSession() async {
         let sessionId = "codex-active-refresh-\(UUID().uuidString)"
         let store = SessionStore.shared
@@ -142,6 +336,80 @@ final class SessionStoreCodexInterventionTests: XCTestCase {
         let session = await store.session(for: sessionId)
         XCTAssertEqual(session?.phase, .processing)
         XCTAssertEqual(session?.previewText, "Done with current step")
+
+        await store.process(.sessionArchived(sessionId: sessionId))
+    }
+
+    func testCodexFinalIdleSnapshotMarksSessionCompletedReady() async {
+        let sessionId = "codex-final-idle-\(UUID().uuidString)"
+        let store = SessionStore.shared
+        let startedAt = Date()
+        let completedAt = startedAt.addingTimeInterval(12)
+
+        await store.syncCodexThreadSnapshot(
+            CodexThreadSnapshot(
+                threadId: sessionId,
+                name: "Codex",
+                preview: "Working",
+                cwd: "/tmp/project",
+                clientInfo: SessionClientInfo.codexApp(threadId: sessionId),
+                intervention: nil,
+                createdAt: startedAt,
+                updatedAt: startedAt,
+                phase: .processing,
+                historyItems: [
+                    ChatHistoryItem(id: "user", type: .user("fix sounds"), timestamp: startedAt)
+                ],
+                conversationInfo: ConversationInfo(
+                    summary: "Codex",
+                    lastMessage: "fix sounds",
+                    lastMessageRole: "user",
+                    lastToolName: nil,
+                    firstUserMessage: "fix sounds",
+                    lastUserMessageDate: startedAt
+                ),
+                latestTurnId: "turn-1",
+                latestResponseText: nil,
+                latestResponsePhase: nil,
+                latestUserText: "fix sounds"
+            )
+        )
+
+        await store.syncCodexThreadSnapshot(
+            CodexThreadSnapshot(
+                threadId: sessionId,
+                name: "Codex",
+                preview: "Done",
+                cwd: "/tmp/project",
+                clientInfo: SessionClientInfo.codexApp(threadId: sessionId),
+                intervention: nil,
+                createdAt: startedAt,
+                updatedAt: completedAt,
+                phase: .idle,
+                historyItems: [
+                    ChatHistoryItem(id: "user", type: .user("fix sounds"), timestamp: startedAt),
+                    ChatHistoryItem(id: "assistant", type: .assistant("Done"), timestamp: completedAt)
+                ],
+                conversationInfo: ConversationInfo(
+                    summary: "Codex",
+                    lastMessage: "Done",
+                    lastMessageRole: "assistant",
+                    lastToolName: nil,
+                    firstUserMessage: "fix sounds",
+                    lastUserMessageDate: startedAt
+                ),
+                latestTurnId: "turn-1",
+                latestResponseText: "Done",
+                latestResponsePhase: "final",
+                latestUserText: "fix sounds"
+            )
+        )
+
+        let session = await store.session(for: sessionId)
+        XCTAssertEqual(session?.phase, .waitingForInput)
+        XCTAssertEqual(session?.createdAt, startedAt)
+        XCTAssertNil(session?.intervention)
+        XCTAssertTrue(session.map(SessionCompletionStateEvaluator.isCompletedReadySession) ?? false)
 
         await store.process(.sessionArchived(sessionId: sessionId))
     }
