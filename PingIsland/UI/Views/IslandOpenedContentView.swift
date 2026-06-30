@@ -3,6 +3,7 @@ import SwiftUI
 struct IslandOpenedContentView: View {
     let sessionMonitor: SessionMonitor
     @ObservedObject var viewModel: NotchViewModel
+    @ObservedObject private var settings = AppSettings.shared
     let surface: IslandExpandedSurface
     let trigger: IslandExpandedTrigger
     let style: IslandOpenedPresentationStyle
@@ -57,6 +58,7 @@ struct IslandOpenedContentView: View {
                 session: liveSession(for: session),
                 sessionMonitor: sessionMonitor,
                 density: surface == .floating ? .detachedCompact : .regular,
+                suppressInAppPromptControls: settings.effectiveRoutePromptsToTerminal,
                 onQuestionInteractionStateChanged: { viewModel.setInlineTextInputActive($0) },
                 onActionCompleted: onAttentionActionCompleted
             )
